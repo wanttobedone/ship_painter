@@ -1,0 +1,48 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <model name="1">
+    <pose>0 0 0 0 0 0</pose>
+    <static>true</static>
+    
+    <link name="link">
+      <!-- 视觉外观 -->
+      <visual name="visual">
+        <geometry>
+          <mesh>
+            <uri>model://test.dae</uri>
+            <scale>1.0 1.0 1.0</scale>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.8 0.8 0.8 1</ambient>
+          <diffuse>0.8 0.8 0.8 1</diffuse>
+          <specular>0.2 0.2 0.2 1</specular>
+        </material>
+      </visual>
+      
+      <!-- 碰撞几何体 -->
+      <collision name="collision">
+        <geometry>
+          <box>
+            <size>2 2 3</size>
+          </box>
+        </geometry>
+      </collision>
+      
+      <!-- 物理属性 -->
+      <inertial>
+        <mass>2.409899</mass>
+        <pose>0.999404 0.000000 0.003925 0 0 0</pose>
+        <inertia>
+
+              <ixx>1.612918</ixx>
+              <ixy>0.0</ixy>
+              <ixz>0.0</ixz>
+              <iyy>8.042190</iyy>
+              <iyz>0.0</iyz>
+              <izz>8.035872</izz>
+        </inertia>
+      </inertial>
+    </link>
+  </model>
+</sdf>

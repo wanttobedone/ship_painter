@@ -1,0 +1,80 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <model name="boat1">
+    <pose>0 0 0 0 0 0</pose>
+    <static>true</static>
+    
+    <link name="link">
+      <!-- 临时用基本几何体代替STL -->
+      <visual name="visual">
+        <geometry>
+          <box>
+            <size>25 5 3</size>
+          </box>
+        </geometry>
+        <material>
+          <ambient>0.3 0.5 0.8 1</ambient>
+          <diffuse>0.4 0.6 0.9 1</diffuse>
+        </material>
+      </visual>
+      
+      <collision name="collision">
+        <geometry>
+          <box>
+            <size>25 5 3</size>
+          </box>
+        </geometry>
+      </collision>
+    </link>
+  </model>
+</sdf>
+<!-- <?xml version="1.0"?>
+<sdf version="1.6">
+  <model name="boat1">
+    <pose>0 0 0 0 0 0</pose>
+    <static>true</static>  <!-- 改为静态，不受重力影响 -->
+    
+    <link name="link">
+      <!-- 视觉外观 -->
+      <visual name="visual">
+        <geometry>
+          <mesh>
+            <!-- 使用完整的包路径 -->
+            <uri>model://boat1/meshes/boat1.stl</uri>
+            <scale>1.0 1.0 1.0</scale>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.2 0.5 0.8 1</ambient>  <!-- 船体蓝色 -->
+          <diffuse>0.3 0.6 0.9 1</diffuse>
+          <specular>0.1 0.1 0.1 1</specular>
+          <emissive>0 0 0 1</emissive>
+        </material>
+      </visual>
+      
+      <!-- 简化的碰撞几何体 - 使用盒子代替复杂mesh -->
+      <collision name="collision">
+        <geometry>
+          <box>
+            <size>30 6 4</size>  <!-- 根据你的船体尺寸调整 -->
+          </box>
+        </geometry>
+        <pose>0 0 2 0 0 0</pose>  <!-- 调整碰撞体位置 -->
+      </collision>
+      
+      <!-- 简化的物理属性 -->
+      <inertial>
+        <mass>1.0</mass>  <!-- 减少到10吨 -->
+        <pose>0 0 1 0 0 0</pose>  <!-- 质心在船体中央 -->
+        <inertia>
+              <ixx>8333.33</ixx>
+              <ixy>0.0</ixy>
+              <ixz>0.0</ixz>
+              <iyy>41666.67</iyy>
+              <iyz>0.0</iyz>
+              <izz>41666.67</izz>
+        </inertia>
+      </inertial>
+    </link>
+  </model>
+</sdf> -->

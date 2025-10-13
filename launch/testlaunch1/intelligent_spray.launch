@@ -1,0 +1,134 @@
+<launch>
+    <!-- 智能喷涂系统 - 集成STL路径规划和视觉导航 -->
+    
+    <!-- 参数配置 -->
+    <arg name="model_path" default="$(find ship_painter)/models/test.stl"/>
+    <arg name="model_x" default="5.0"/>
+    <arg name="model_y" default="0.0"/>
+    <arg name="model_z" default="0.0"/>
+    
+    <!-- 视觉参数 -->
+    <arg name="enable_visual_feedback" default="true"/>
+    <arg name="target_distance" default="0.5"/>
+    <arg name="distance_tolerance" default="0.05"/>
+    <arg name="visual_timeout" default="1.0"/>
+    
+    <!-- 飞行参数 -->
+    <arg name="max_velocity" default="0.5"/>
+    <arg name="approach_velocity" default="0.3"/>
+    <arg name="waypoint_tolerance" default="0.15"/>
+    
+    <!-- 1. 视觉处理节点 -->
+    <node name="visual_processor" pkg="ship_painter" type="visual_processor_node" 
+          output="screen" if="$(arg enable_visual_feedback)">
+        <param name="camera_topic" value="/iris_0/camera/image_raw"/>
+        <param name="depth_topic" value="/iris_0/camera/depth/image_raw"/>
+        <param name="pointcloud_topic" value="/iris_0/velodyne_points"/>
+        <param name="target_distance" value="$(arg target_distance)"/>
+        <param name="distance_tolerance" value="$(arg distance_tolerance)"/>
+        <param name="enable_visualization" value="true"/>
+        
+        <!-- 相机内参 (需要根据实际相机调整) -->
+        <param name="camera_fx" value="800.0"/>
+        <param name="camera_fy" value="800.0"/>
+        <param name="camera_cx" value="400.0"/>
+        <param name="camera_cy" value="300.0"/>
+        
+        <!-- 滤波参数 -->
+        <param name="history_size" value="10"/>
+        <param name="outlier_threshold" value="0.2"/>
+    </node>
+    
+    <!-- 2. 集成喷涂系统主节点 -->
+    <node name="integrated_spray_painter" pkg="ship_painter" 
+          type="ship_painter_integrated_node" output="screen">
+        
+        <!-- STL模型配置 -->
+        <param name="model_path" value="$(arg model_path)"/>
+        <param name="model_x" value="$(arg model_x)"/>
+        <param name="model_y" value="$(arg model_y)"/>
+        <param name="model_z" value="$(arg model_z)"/>
+        
+        <!-- 喷涂参数 -->
+        <param name="target_distance" value="$(arg target_distance)"/>
+        <param name="distance_tolerance" value="$(arg distance_tolerance)"/>
+        <param name="spray_radius" value="0.125"/>
+        <param name="layer_height" value="0.25"/>
+        
+        <!-- 飞行控制参数 -->
+        <param name="max_velocity" value="$(arg max_velocity)"/>
+        <param name="approach_velocity" value="$(arg approach_velocity)"/>
+        <param name="waypoint_tolerance" value="$(arg waypoint_tolerance)"/>
+        <param name="takeoff_height" value="2.0"/>
+        
+        <!-- 视觉反馈参数 -->
+        <param name="visual_timeout" value="$(arg visual_timeout)"/>
+        <param name="visual_update_rate" value="0.1"/>
+        <param name="visual_history_size" value="10"/>
+        
+        <!-- 坐标系 -->
+        <param name="frame_id" value="world"/>
+        
+        <!-- 安全参数 -->
+        <param name="safety_margin" value="0.2"/>
+        <param name="emergency_land_height" value="0.5"/>
+    </node>
+    
+    <!-- 3. RViz可视化 -->
+    <node name="rviz" pkg="rviz" type="rviz" 
+          args="-d $(find ship_painter)/rviz/intelligent_spray.rviz"/>
+    
+    <!-- 4. TF变换 -->
+    <node pkg="tf" type="static_transform_publisher" name="world_to_map" 
+          args="0 0 0 0 0 0 world map 100"/>
+    
+    <!-- 5. ArUco标记检测 (可选，用于辅助定位) -->
+    <group if="$(arg enable_visual_feedback)">
+        <node pkg="aruco_ros" type="single" name="aruco_single" output="screen">
+            <remap from="/camera_info" to="/iris_0/camera/camera_info"/>
+            <remap from="/image" to="/iris_0/camera/image_raw"/>
+            <param name="image_is_rectified" value="true"/>
+            <param name="marker_size" value="0.15"/>
+            <param name="marker_id" value="100"/>
+            <param name="reference_frame" value="camera_link"/>
+            <param name="camera_frame" value="camera_link"/>
+            <param name="marker_frame" value="aruco_marker_frame"/>
+        </node>
+    </group>
+    
+    <!-- 6. 参数服务器配置 -->
+    <rosparam file="$(find ship_painter)/config/spray_params.yaml" command="load"/>
+    
+    <!-- 7. 诊断和监控 -->
+    <node name="system_monitor" pkg="ship_painter" type="system_monitor.py" 
+          output="screen" if="false">
+        <param name="monitor_topics" value="['/iris_0/mavros/state', 
+                                            '/visual/distance_to_surface', 
+                                            '/spray_system/current_target']"/>
+        <param name="log_file" value="/tmp/spray_mission.log"/>
+    </node>
+    
+    <!-- 8. 数据记录 (可选) -->
+    <group if="false">
+        <node name="mission_recorder" pkg="rosbag" type="record" 
+              args="-O /tmp/spray_mission.bag
+                    /iris_0/mavros/local_position/pose
+                    /visual/distance_to_surface
+                    /visual/surface_normal
+                    /spray_system/current_target
+                    /visualization/spray_path
+                    /iris_0/camera/image_raw"/>
+    </group>
+    
+    <!-- 调试信息 -->
+    <group if="true">
+        <node name="rqt_console" pkg="rqt_console" type="rqt_console" 
+              launch-prefix="bash -c 'sleep 3; $0 $@'"/>
+              
+        <node name="mission_status" pkg="rqt_plot" type="rqt_plot" 
+              args="/visual/distance_to_surface/data 
+                    /iris_0/mavros/local_position/pose/pose/position/z"
+              launch-prefix="bash -c 'sleep 5; $0 $@'" if="false"/>
+    </group>
+    
+</launch>
