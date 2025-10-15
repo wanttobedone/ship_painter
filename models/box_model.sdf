@@ -1,0 +1,53 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <model name="box">
+    <static>true</static> <!-- 设置为 true 表示静态物体，不会移动 -->
+    
+    <link name="link">
+      <!-- 碰撞属性 -->
+      <collision name="collision">
+        <geometry>
+          <box>
+            <size>2.0 1.0 0.5</size> <!-- 长(x) 宽(y) 高(z) 单位：米 -->
+          </box>
+        </geometry>
+        <surface>
+          <friction>
+            <ode>
+              <mu>0.5</mu>
+              <mu2>0.5</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+      
+      <!-- 视觉属性 -->
+      <visual name="visual">
+        <geometry>
+          <box>
+            <size>2.0 1.0 0.5</size>
+          </box>
+        </geometry>
+        <material>
+          <ambient>0.8 0.2 0.2 1</ambient> <!-- RGBA 颜色 (红) -->
+          <diffuse>0.8 0.2 0.2 1</diffuse>
+          <specular>0.1 0.1 0.1 1</specular>
+          <emissive>0 0 0 0</emissive>
+        </material>
+      </visual>
+      
+      <!-- 物理属性 -->
+      <inertial>
+        <mass>10.0</mass> <!-- 质量 (千克) -->
+        <inertia>
+          <ixx>0.833</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>0.833</iyy>
+          <iyz>0</iyz>
+          <izz>0.833</izz>
+        </inertia>
+      </inertial>
+    </link>
+  </model>
+</sdf>

@@ -1,0 +1,16 @@
+<launch>
+    
+    <!-- 生成船体模型 -->
+    <node name="spawn_ship" pkg="gazebo_ros" type="spawn_model" 
+        args="-sdf -file $(find ship_painter)/models/box_model.sdf -model boat1 -x 5 -y 7.5 -z 0.25" 
+        launch-prefix="bash -c 'sleep 3; $0 $@' "
+        output="screen"/>
+          
+    <!-- 可选：等待几秒再生成模型，确保Gazebo完全启动 -->
+    <!--
+    <node pkg="gazebo_ros" type="spawn_model" name="spawn_ship"
+          args="-sdf -model boat1 -x 5 -y 7.5 -z 0.25"
+          launch-prefix="bash -c 'sleep 3; $0 $@' "
+          output="screen"/>
+    -->
+</launch>

@@ -1,0 +1,137 @@
+<launch>
+    <!-- 全局参数定义 -->
+    <arg name="model_x" default="5.0"/>
+    <arg name="model_y" default="0.0"/>
+    <arg name="model_z" default="0.0"/>
+    <arg name="use_position_control" default="false"/>
+    <arg name="enable_visualization" default="true"/>
+    
+    <!-- 启动延迟参数 -->
+    <arg name="startup_delay" default="5"/>
+    <arg name="spawn_delay" default="5"/>
+    <arg name="painter_delay" default="7"/>
+    <arg name="rviz_delay" default="8"/>
+    
+    <!-- 环境变量设置 -->
+    <env name="PX4_SIM_MODEL" value="iris" />
+    <env name="GAZEBO_MODEL_PATH" value="$(find ship_painter)/models:$(optenv GAZEBO_MODEL_PATH)" />
+    
+    <!-- 启动PX4和Gazebo仿真 -->
+    <include file="/home/demo/PX4_Firmware/launch/indoor1.launch">
+        <arg name="world" value="$(find ship_painter)/worlds/ship.world"/>
+    </include>
+    
+    <!-- 生成船体模型 (如果需要) -->
+    <node name="spawn_ship" pkg="gazebo_ros" type="spawn_model" 
+          args="-sdf -file $(find ship_painter)/models/model_for_test.sdf -model boat 
+                -x $(arg model_x) 
+                -y $(arg model_y)
+                -z $(arg model_z)" 
+          launch-prefix="bash -c 'sleep $(arg spawn_delay); $0 $@' " 
+          output="screen"
+          if="true">  <!-- 设置为true以生成Gazebo模型 -->
+    </node>
+    
+    <!-- 启动改进的路径规划和控制节点 -->
+    <group ns="iris_0">
+        <node name="ship_painter_node" pkg="ship_painter" type="ship_painter_node" 
+              output="screen" launch-prefix="bash -c 'sleep $(arg painter_delay); $0 $@' ">
+            
+            <!-- STL模型路径 -->
+            <param name="model_path" value="$(find ship_painter)/models/model_for_test.stl"/>
+            
+            <!-- 模型位置 -->
+            <param name="model_x" value="$(arg model_x)"/>
+            <param name="model_y" value="$(arg model_y)"/>
+            <param name="model_z" value="$(arg model_z)"/>
+            
+            <!-- 喷涂基本参数 -->
+            <param name="spray_radius" value="0.125"/>
+            <param name="spray_distance" value="0.5"/>
+            <param name="layer_height" value="0.25"/>
+            <param name="max_height_variation" value="0.025"/>
+            
+            <!-- 改进的聚类参数 -->
+            <param name="clustering_tolerance" value="0.15"/>
+            <param name="normal_angle_threshold" value="0.524"/>  <!-- 30度 -->
+            <param name="min_cluster_size" value="20"/>
+            <param name="corner_detection_angle" value="0.785"/>  <!-- 45度 -->
+            <param name="vertical_threshold" value="1.222"/>      <!-- 70度 -->
+            
+            <!-- 折角和曲面处理参数 -->
+            <param name="corner_safety_margin" value="0.4"/>      <!-- 40cm安全距离 -->
+            <param name="concave_detection_depth" value="0.5"/>   <!-- 凹面检测深度 -->
+            <param name="enable_corner_smoothing" value="true"/>
+            
+            <!-- 自适应采样参数 -->
+            <param name="enable_adaptive_sampling" value="true"/>
+            <param name="small_object_threshold" value="8.0"/>    <!-- 2x2x2 = 8 m³ -->
+            <param name="dense_sampling_factor" value="3.0"/>     <!-- 小物体3倍采样密度 -->
+            
+            <!-- 航点优化参数 -->
+            <param name="min_waypoint_spacing" value="0.05"/>     <!-- 最小5cm -->
+            <param name="max_waypoint_spacing" value="0.3"/>      <!-- 最大30cm -->
+            <param name="small_object_spacing" value="0.03"/>     <!-- 小物体3cm -->
+            
+            <!-- 体素分辨率（自适应调整） -->
+            <param name="voxel_resolution" value="0.02"/>         <!-- 初始值，会自动调整 -->
+            
+            <!-- 路径规划参数 -->
+            <param name="path_smoothing_alpha" value="0.3"/>
+            <param name="corner_radius" value="0.3"/>
+            <param name="path_overlap_ratio" value="0.1"/>
+            
+            <!-- 飞行控制参数 -->
+            <param name="takeoff_height" value="2.0"/>
+            <param name="flight_speed" value="0.5"/>
+            <param name="approach_speed" value="0.3"/>
+            <param name="position_tolerance" value="0.15"/>
+            <param name="orientation_tolerance" value="0.1"/>
+            <param name="waypoint_hold_time" value="0.5"/>
+            
+            <!-- 姿态控制参数 -->
+            <param name="use_position_control" value="$(arg use_position_control)"/>
+            <param name="adaptive_pitch" value="true"/>
+            <param name="use_roll_for_translation" value="true"/>
+            <param name="max_roll" value="0.26"/>                 <!-- 15度 -->
+            <param name="max_pitch_adjustment" value="0.52"/>     <!-- 30度 -->
+            
+            <!-- 可视化 -->
+            <param name="enable_spray_visualization" value="$(arg enable_visualization)"/>
+            <param name="frame_id" value="world"/>
+        </node>
+    </group>
+    
+    <!-- 可视化工具 -->
+    <group if="$(arg enable_visualization)">
+        <!-- RViz -->
+        <node name="rviz" pkg="rviz" type="rviz" 
+              args="-d $(find ship_painter)/rviz/ship_painter.rviz"
+              launch-prefix="bash -c 'sleep $(arg rviz_delay); $0 $@' "/>
+        
+        <!-- 路径验证器 (新增) -->
+        <node name="path_validator" pkg="ship_painter" type="test_path_validation.py" 
+              output="screen" required="false"
+              launch-prefix="bash -c 'sleep 10; $0 $@' "/>
+    </group>
+    
+    <!-- TF变换 -->
+    <node pkg="tf" type="static_transform_publisher" name="world_to_map" 
+          args="0 0 0 0 0 0 world map 100"/>
+    
+    <!-- 诊断和监控 -->
+    <node name="rqt_console" pkg="rqt_console" type="rqt_console" 
+          launch-prefix="bash -c 'sleep 2; $0 $@' " required="false"/>
+    
+    <!-- 记录数据（可选） -->
+    <arg name="record_rosbag" default="false"/>
+    <node if="$(arg record_rosbag)" name="rosbag_record" pkg="rosbag" type="record"
+          args="-o $(find ship_painter)/bags/ship_painter_improved 
+                /iris_0/mavros/local_position/pose 
+                /iris_0/mavros/state 
+                /visualization/path 
+                /visualization/spray 
+                /visualization/status
+                /validation/results
+                /validation/issues"/>
+</launch>

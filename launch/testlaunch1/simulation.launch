@@ -1,0 +1,42 @@
+<launch>
+    <!-- 设置无人机型号 -->
+    <env name="PX4_SIM_MODEL" value="iris" />
+    
+    <!-- XTDrone 的 PX4 启动配置 -->
+    <!-- <include file="/home/demo/PX4_Firmware/launch/multi_uav_mavros_sitl.launch"> -->
+    <include file="/home/demo/PX4_Firmware/launch/indoor1.launch">
+        <arg name="world" value="$(find ship_painter)/worlds/ship.world"/>
+        <!-- 使用标准模型路径 -->
+        <!-- <arg name="vehicle" value="iris"/> -->
+    </include>
+
+    <!-- 加载船体模型 -->
+    <!-- <node name="spawn_ship" pkg="gazebo_ros" type="spawn_model" 
+        args="-sdf -file $(find ship_painter)/models/ship_model.stl -model ship -x 0 -y 0 -z 0" /> -->
+
+    <node name="spawn_box" pkg="gazebo_ros" type="spawn_model" 
+      args="-sdf -file $(find ship_painter)/models/box_model.sdf -model box -x 5 -y 0 -z 0.25" 
+      output="screen"/>
+    
+    <!-- 启动路径规划节点 -->
+         <!-- 启动路径规划节点 -->
+    <group ns="uav1">
+        <node name="ship_painter_node" pkg="ship_painter" type="ship_painter_node" output="screen">
+            <param name="model_path" value="$(find ship_painter)/models/box.stl"/>
+            <param name="offset_distance" value="0.5"/>
+            <param name="flight_height" value="5.0"/>
+            <param name="frame_id" value="world"/>
+            
+            <!-- 完全重映射MAVROS话题 -->
+            <remap from="mavros/state" to="mavros/state"/>
+            <remap from="mavros/local_position/pose" to="mavros/local_position/pose"/>
+            <remap from="mavros/setpoint_position/local" to="mavros/setpoint_position/local"/>
+            <remap from="mavros/set_mode" to="mavros/set_mode"/>
+            <remap from="mavros/cmd/arming" to="mavros/cmd/arming"/>
+        </node>
+    </group>
+    
+    <!-- 启动 Rviz -->
+    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find ship_painter)/rviz/ship_painter.rviz"/>
+    <node pkg="tf" type="static_transform_publisher" name="world_to_map" args="0 0 0 0 0 0 world map 100"/>
+</launch>

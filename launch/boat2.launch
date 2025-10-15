@@ -1,0 +1,56 @@
+<launch>
+    
+    <!-- 启动路径规划节点 -->
+    <group ns="iris_0">
+        <node name="ship_painter_node" pkg="ship_painter" type="ship_painter_node" output="screen">
+            <!-- STL模型路径 -->
+            <param name="model_path" value="$(find ship_painter)/models/test.stl"/>
+
+            <!-- 路径规划参数 -->
+            <param name="alpha_shape_value" value="2"/>
+            <param name="target_sample_count" value="100000"/>
+                
+            <!-- rviz中模型位置显示参数 -->
+            <param name="display_model_x" value="0"/>
+            <param name="display_model_y" value="-2.5"/>
+            <param name="display_model_z" value="0"/>
+            
+            <!-- 喷涂参数 -->
+            <param name="spray_distance" value="0.5"/>
+            <param name="layer_height" value="0.25"/>
+
+            <!-- 点云可视化设置 -->
+            <param name="enable_spray_visualization" value="true"/>
+
+            <!-- 强制启用Clipper -->
+            <param name="use_clipper_offset" value="true"/>
+            <param name="clipper_offset_precision" value="1.0"/>
+            <param name="min_offset_segment_length" value="0.001"/>
+            
+            <!-- 路径规划参数 - 针对3D法向偏移 -->
+            <param name="offset_distance" value="0.5"/>     <!-- 偏移距离 -->
+            
+            <!-- 法向量估计参数 -->
+            <param name="voxel_resolution" value="0.03"/>    <!-- 体素大小 -->
+            
+            <!-- 飞行参数 - 针对姿态控制优化 -->
+            <param name="takeoff_height" value="2.0"/>
+            <param name="waypoint_tolerance" value="0.2"/>   <!-- 减小位置容差，暂未用到 -->
+            <param name="orientation_tolerance" value="0.15"/><!-- 姿态容差(约8.5度) -->
+            <param name="flight_speed" value="0.8"/>         <!-- 降低飞行速度确保姿态稳定 -->
+            
+            <param name="frame_id" value="world"/>
+        </node>
+    </group>
+    
+    <!-- 启动 RViz 可视化 -->
+    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find ship_painter)/rviz/ship_painter.rviz"/>
+    
+    <!-- TF变换：world到map -->
+    <node pkg="tf" type="static_transform_publisher" name="world_to_map" 
+          args="0 0 0 0 0 0 world map 100"/>
+    
+    <!-- 诊断信息显示 -->
+    <node name="rqt_console" pkg="rqt_console" type="rqt_console" 
+          launch-prefix="bash -c 'sleep 2; $0 $@' "/>
+</launch>

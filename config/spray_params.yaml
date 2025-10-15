@@ -1,0 +1,300 @@
+# intelligent_spray_config.yaml - 智能喷涂系统配置文件
+
+# 系统运行模式
+system:
+  mode: "intelligent"          # intelligent, traditional, visual_only
+  enable_visual_guidance: true # 启用视觉引导
+  enable_stl_fallback: true    # STL路径作为备选
+  debug_mode: false            # 调试模式
+  log_level: "info"            # debug, info, warn, error
+
+# STL模型和路径规划参数
+path_planning:
+  # STL模型配置
+  model:
+    path: "$(find ship_painter)/models/test.stl"
+    position: [5.0, 0.0, 0.0]   # 模型在世界坐标系中的位置
+    rotation: [0.0, 0.0, 0.0]   # 模型旋转角度 (roll, pitch, yaw)
+    scale: 1.0                  # 模型缩放比例
+  
+  # 喷涂参数
+  spray:
+    radius: 0.125               # 喷雾半径 (m)
+    distance: 0.5               # 目标喷涂距离 (m)
+    width: 0.25                # 喷涂带宽度 (m)
+    overlap: 0.1               # 路径重叠率 (0-1)
+    coverage_threshold: 0.95   # 覆盖率阈值
+  
+  # 分层参数
+  layers:
+    height: 0.25               # 层间距 (m)
+    max_height_diff: 0.025     # 同层最大高度差 (m)
+    waypoints_per_layer: 36    # 每层航点数量
+    min_points_per_layer: 10   # 每层最少点数
+  
+  # 路径优化
+  optimization:
+    enable_smoothing: true     # 启用路径平滑
+    smooth_iterations: 2       # 平滑迭代次数
+    corner_radius: 0.2         # 转角半径 (m)
+    remove_redundant: true     # 移除冗余航点
+    adaptive_density: true     # 自适应航点密度
+
+# 视觉处理参数
+vision:
+  # 基本设置
+  enable: true                 # 启用视觉处理
+  update_rate: 30             # 处理频率 (Hz)
+  timeout: 1.0                # 视觉数据超时时间 (s)
+  
+  # 传感器配置
+  sensors:
+    camera:
+      topic: "/iris_0/camera/image_raw"
+      info_topic: "/iris_0/camera/camera_info"
+      enable: true
+    depth:
+      topic: "/iris_0/camera/depth/image_raw"
+      enable: true
+      min_range: 0.1           # 最小深度 (m)
+      max_range: 10.0          # 最大深度 (m)
+    lidar:
+      topic: "/iris_0/velodyne_points"
+      enable: false
+      range_limit: 5.0         # 激光雷达范围限制 (m)
+  
+  # 相机内参 (需要根据实际相机调整)
+  camera_intrinsics:
+    fx: 800.0
+    fy: 800.0
+    cx: 400.0
+    cy: 300.0
+    k1: 0.0                    # 径向畸变系数
+    k2: 0.0
+    p1: 0.0                    # 切向畸变系数
+    p2: 0.0
+    k3: 0.0
+  
+  # 图像处理
+  image_processing:
+    # 边缘检测
+    edge_detection:
+      canny_low: 50
+      canny_high: 150
+      gaussian_blur_size: 5
+      gaussian_sigma: 1.0
+    
+    # 轮廓检测
+    contour_detection:
+      min_area: 100            # 最小轮廓面积 (像素^2)
+      max_area: 50000          # 最大轮廓面积
+      approximation_epsilon: 0.02
+    
+    # 特征匹配 (可选)
+    feature_matching:
+      enable: false
+      detector_type: "ORB"     # ORB, SIFT, SURF
+      max_features: 500
+  
+  # 3D重建和法向量估计
+  surface_analysis:
+    normal_estimation:
+      k_search: 20             # K邻域搜索点数
+      search_radius: 0.1       # 搜索半径 (m)
+      method: "PCA"            # PCA, RANSAC
+    
+    distance_estimation:
+      method: "closest_point"  # closest_point, plane_fitting, depth_average
+      filter_outliers: true
+      outlier_threshold: 0.2   # 异常值阈值 (m)
+  
+  # 滤波和平滑
+  filtering:
+    enable: true
+    distance_filter:
+      type: "moving_average"   # moving_average, kalman, median
+      window_size: 10
+      outlier_rejection: true
+      outlier_threshold: 3.0   # 标准差倍数
+    
+    normal_filter:
+      type: "moving_average"
+      window_size: 5
+      angular_threshold: 0.5   # 角度变化阈值 (rad)
+  
+  # 视觉反馈权重
+  feedback_weights:
+    distance_correction: 0.8   # 距离修正权重
+    normal_correction: 0.6     # 法向量修正权重
+    position_update: 0.1       # 位置更新权重
+    max_correction: 0.3        # 最大修正幅度 (m)
+
+# 飞行控制参数
+flight_control:
+  # 基本飞行参数
+  speeds:
+    max_velocity: 0.5          # 最大飞行速度 (m/s)
+    approach_velocity: 0.3     # 接近速度 (m/s)
+    corner_velocity: 0.2       # 转角速度 (m/s)
+    emergency_velocity: 0.8    # 紧急情况速度 (m/s)
+  
+  # 容差设置
+  tolerances:
+    position: 0.15             # 位置容差 (m)
+    orientation: 0.15          # 姿态容差 (rad)
+    distance: 0.05             # 距离容差 (m)
+    velocity: 0.1              # 速度容差 (m/s)
+  
+  # 航点管理
+  waypoint:
+    hold_time: 0.5             # 航点停留时间 (s)
+    timeout: 10.0              # 航点超时时间 (s)
+    retry_count: 3             # 重试次数
+    skip_unreachable: true     # 跳过无法到达的航点
+  
+  # 姿态控制
+  attitude:
+    enable_roll_compensation: true    # 启用横滚补偿
+    max_roll: 0.26                   # 最大横滚角 (15度)
+    max_pitch: 0.52                  # 最大俯仰角 (30度)
+    yaw_rate_limit: 1.0              # 偏航速率限制 (rad/s)
+  
+  # PID控制器参数
+  pid_controllers:
+    position:
+      x: {p: 1.0, i: 0.1, d: 0.2}
+      y: {p: 1.0, i: 0.1, d: 0.2}
+      z: {p: 1.2, i: 0.15, d: 0.3}
+    
+    velocity:
+      x: {p: 0.8, i: 0.05, d: 0.1}
+      y: {p: 0.8, i: 0.05, d: 0.1}
+      z: {p: 1.0, i: 0.08, d: 0.15}
+    
+    distance_keeping:
+      p: 1.5
+      i: 0.2
+      d: 0.3
+      max_output: 0.5
+
+# 安全参数
+safety:
+  # 飞行边界
+  flight_envelope:
+    min_altitude: 0.5          # 最小飞行高度 (m)
+    max_altitude: 10.0         # 最大飞行高度 (m)
+    geofence_radius: 20.0      # 地理围栏半径 (m)
+    geofence_center: [0.0, 0.0, 0.0]  # 围栏中心
+  
+  # 碰撞避免
+  collision_avoidance:
+    enable: true
+    min_distance: 0.01          # 最小安全距离 (m)
+    reaction_time: 0.5         # 反应时间 (s)
+    avoidance_velocity: 0.2    # 避障速度 (m/s)
+    recovery_time: 2.0         # 恢复时间 (s)
+  
+  # 失效保护
+  failsafe:
+    battery_threshold: 0.2     # 电池警告阈值 (0-1)
+    communication_timeout: 5.0 # 通信超时时间 (s)
+    vision_loss_timeout: 3.0   # 视觉丢失超时 (s)
+    emergency_land: true       # 紧急降落
+    return_to_home: true       # 返航
+  
+  # 监控参数
+  monitoring:
+    enable_watchdog: true      # 启用看门狗
+    health_check_interval: 1.0 # 健康检查间隔 (s)
+    log_critical_events: true # 记录关键事件
+
+# 任务管理
+mission:
+  # 任务设置
+  settings:
+    auto_start: false          # 自动开始任务
+    auto_land_after_complete: true  # 完成后自动降落
+    return_to_home: true       # 返回起始点
+    save_progress: true        # 保存进度
+  
+  # 错误处理
+  error_handling:
+    max_retries: 3             # 最大重试次数
+    retry_delay: 2.0           # 重试延迟 (s)
+    abort_on_critical: true    # 严重错误时终止
+    partial_completion: true   # 允许部分完成
+  
+  # 检查点
+  checkpoints:
+    enable: true
+    interval: 10               # 检查点间隔 (航点数)
+    save_path: "/tmp/spray_mission_checkpoint.yaml"
+    auto_recovery: true        # 自动恢复
+
+# 系统监控和日志
+monitoring:
+  # 性能监控
+  performance:
+    enable: true
+    sample_rate: 1.0           # 采样率 (Hz)
+    metrics: ["cpu_usage", "memory_usage", "network_latency", "control_loop_time"]
+  
+  # 数据记录
+  logging:
+    enable: true
+    log_level: "info"          # debug, info, warn, error
+    log_file: "/tmp/intelligent_spray.log"
+    max_file_size: "100MB"
+    backup_count: 5
+    
+    # 话题记录
+    topics_to_record:
+      - "/iris_0/mavros/local_position/pose"
+      - "/visual/distance_to_surface"
+      - "/visual/surface_normal"
+      - "/spray_system/current_target"
+      - "/visualization/spray_path"
+  
+  # 实时可视化
+  visualization:
+    enable: true
+    update_rate: 10            # 可视化更新率 (Hz)
+    markers:
+      path_width: 0.03
+      waypoint_size: 0.05
+      normal_length: 0.3
+      status_text_size: 0.5
+
+# ROS通信设置
+ros_communication:
+  # 话题配置
+  topics:
+    # 输入话题
+    mavros_state: "/iris_0/mavros/state"
+    mavros_pose: "/iris_0/mavros/local_position/pose"
+    camera_image: "/iris_0/camera/image_raw"
+    camera_depth: "/iris_0/camera/depth/image_raw"
+    pointcloud: "/iris_0/velodyne_points"
+    
+    # 输出话题
+    setpoint_raw: "/iris_0/mavros/setpoint_raw/local"
+    current_target: "/spray_system/current_target"
+    path_visualization: "/visualization/spray_path"
+    system_status: "/visualization/system_status"
+  
+  # 服务配置
+  services:
+    arming: "/iris_0/mavros/cmd/arming"
+    set_mode: "/iris_0/mavros/set_mode"
+  
+  # 消息队列大小
+  queue_sizes:
+    command: 10
+    status: 5
+    visualization: 100
+    
+  # 通信可靠性
+  reliability:
+    connection_timeout: 5.0    # 连接超时 (s)
+    retry_attempts: 3          # 重试次数
+    heartbeat_interval: 1.0    # 心跳间隔 (s)

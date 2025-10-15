@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <model name="boat1">
+    <pose>0 0 0 0 0 0</pose>
+    <static>true</static>
+    
+    <link name="link">
+      <!-- 视觉外观 - 使用DAE文件 -->
+      <visual name="visual">
+        <geometry>
+          <mesh>
+            <uri>model://boat1/meshes/boat1.dae</uri>
+            <scale>1.0 1.0 1.0</scale>
+          </mesh>
+        </geometry>
+      </visual>
+      
+      <!-- 简化的碰撞检测 -->
+      <collision name="collision">
+        <geometry>
+          <box>
+            <size>2 2 3</size>
+          </box>
+        </geometry>
+        <pose>0 0 1.5 0 0 0</pose>
+      </collision>
+    </link>
+  </model>
+</sdf>

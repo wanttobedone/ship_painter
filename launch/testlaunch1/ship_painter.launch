@@ -1,0 +1,116 @@
+<launch>
+    <!-- 全局参数定义 -->
+    <arg name="model_x" default="5.0"/>
+    <arg name="model_y" default="0.0"/>
+    <arg name="model_z" default="0.0"/>
+    <arg name="model_x1" default="3.5"/>
+    <arg name="model_y1" default="7.5"/>
+    <arg name="model_z1" default="0.0"/>
+    <arg name="use_position_control" default="false"/>
+    <arg name="enable_visualization" default="true"/>
+        <!-- 在文件顶部添加这些参数 -->
+    <arg name="startup_delay" default="5"/>
+    <arg name="spawn_delay" default="5"/>          <!-- 与startup_delay相同 -->
+    <arg name="painter_delay" default="7"/>        <!-- startup_delay + 2 -->
+    <arg name="rviz_delay" default="8"/>           <!-- startup_delay + 3 -->
+    <arg name="analyzer_delay" default="10"/>      <!-- startup_delay + 5 -->
+    
+    <!-- 环境变量设置 -->
+    <env name="PX4_SIM_MODEL" value="iris" />
+    <env name="GAZEBO_MODEL_PATH" value="$(find ship_painter)/models:$(optenv GAZEBO_MODEL_PATH)" />
+    
+    <!-- 启动PX4和Gazebo仿真 -->
+    <include file="/home/demo/PX4_Firmware/launch/indoor1.launch">
+        <arg name="world" value="$(find ship_painter)/worlds/ship.world"/>
+    </include>
+    
+    <!-- 等待仿真环境准备就绪 -->
+    <!-- <arg name="startup_delay" default="5"/> -->
+    
+    <!-- 生成船体模型 -->
+    <node name="spawn_ship" pkg="gazebo_ros" type="spawn_model" 
+      args="-sdf -file $(find ship_painter)/models/test.sdf -model boat 
+            -x $(arg model_x1) 
+            -y $(arg model_y1)
+            -z $(arg model_z1)" 
+      launch-prefix="bash -c 'sleep $(arg spawn_delay); $0 $@' " 
+      output="screen">
+    </node>
+    
+    <!-- 启动路径规划和控制节点 -->
+    <group ns="iris_0">
+        <node name="ship_painter_node" pkg="ship_painter" type="ship_painter_node" 
+              output="screen" launch-prefix="bash -c 'sleep $(arg painter_delay); $0 $@' ">
+            
+            <!-- STL模型路径 -->
+            <param name="model_path" value="$(find ship_painter)/models/test.stl"/>
+            
+            <!-- 模型位置（与spawn位置一致） -->
+            <param name="model_x" value="$(arg model_x)"/>
+            <param name="model_y" value="$(arg model_y)"/>
+            <param name="model_z" value="$(arg model_z)"/>
+            
+            <!-- 喷涂参数 -->
+            <param name="spray_radius" value="0.125"/>        <!-- 喷雾半径 -->
+            <param name="spray_distance" value="0.5"/>        <!-- 喷头到表面距离 -->
+            <param name="layer_height" value="0.25"/>         <!-- 层间距(2*spray_radius) -->
+            <param name="max_height_variation" value="0.025"/> <!-- 同层最大高度差 -->
+            
+            <!-- 路径规划参数 -->
+            <param name="voxel_resolution" value="0.02"/>     <!-- 体素大小 -->
+            <param name="normal_k_search" value="30"/>        <!-- 法向量估计K邻域 -->
+            <param name="min_points_per_layer" value="10"/>   <!-- 每层最少点数 -->
+            
+            <!-- 飞行控制参数 -->
+            <param name="takeoff_height" value="2.0"/>        <!-- 起飞高度 -->
+            <param name="flight_speed" value="0.5"/>          <!-- 飞行速度 -->
+            <param name="approach_speed" value="0.3"/>        <!-- 接近速度 -->
+            <param name="position_tolerance" value="0.15"/>   <!-- 位置容差 -->
+            <param name="orientation_tolerance" value="0.1"/> <!-- 姿态容差(~5.7度) -->
+            <param name="waypoint_hold_time" value="0.5"/>    <!-- 航点停留时间 -->
+            
+            <!-- 姿态控制参数 -->
+            <param name="use_position_control" value="$(arg use_position_control)"/>
+            <param name="max_roll" value="0.26"/>             <!-- 最大翻滚角(15度) -->
+            <param name="max_pitch_adjustment" value="0.52"/> <!-- 最大俯仰调整(30度) -->
+            <param name="yaw_gain" value="0.8"/>
+            <param name="pitch_gain" value="0.8"/>
+            <param name="roll_gain" value="0.5"/>
+            
+            <!-- 可视化 -->
+            <param name="enable_spray_visualization" value="$(arg enable_visualization)"/>
+            <param name="frame_id" value="world"/>
+        </node>
+    </group>
+    
+    <!-- 可视化工具 -->
+    <group if="$(arg enable_visualization)">
+        <!-- RViz -->
+        <node name="rviz" pkg="rviz" type="rviz" 
+            args="-d $(find ship_painter)/rviz/ship_painter.rviz"
+            launch-prefix="bash -c 'sleep $(arg rviz_delay); $0 $@' "/>
+        
+        <!-- 路径分析器 -->
+        <node name="path_analyzer" pkg="ship_painter" type="test_path_generation.py" 
+            output="screen" required="false"
+            launch-prefix="bash -c 'sleep $(arg analyzer_delay); $0 $@' "/>
+    </group>
+    
+    <!-- TF变换 -->
+    <node pkg="tf" type="static_transform_publisher" name="world_to_map" 
+          args="0 0 0 0 0 0 world map 100"/>
+    
+    <!-- 诊断和监控 -->
+    <node name="rqt_console" pkg="rqt_console" type="rqt_console" 
+          launch-prefix="bash -c 'sleep 2; $0 $@' " required="false"/>
+    
+    <!-- 记录数据（可选） -->
+    <arg name="record_rosbag" default="false"/>
+    <node if="$(arg record_rosbag)" name="rosbag_record" pkg="rosbag" type="record"
+          args="-o $(find ship_painter)/bags/ship_painter 
+                /iris_0/mavros/local_position/pose 
+                /iris_0/mavros/state 
+                /visualization/path 
+                /visualization/spray 
+                /visualization/status"/>
+</launch>
