@@ -20,7 +20,7 @@ public:
     struct Waypoint {
         Eigen::Vector3d position;      // 位置
         Eigen::Vector3d surface_normal; // 表面法向量
-        Eigen::Vector3d approach_dir;   // 接近方向（通常是-normal）
+        Eigen::Vector3d approach_dir;   // 接近方向（-normal）
         double yaw;                     // 偏航角
         double pitch;                   // 俯仰角
         double roll;                    // 翻滚角（用于横向移动）
@@ -74,6 +74,11 @@ public:
         double model_display_x;        // RViz中模型显示位置
         double model_display_y;
         double model_display_z;
+
+        double normal_angle_threshold;   // 法向量角度阈值（弧度）
+        bool enable_normal_smoothing;    // 是否启用法向量平滑
+
+        double resample_spacing;  // 等距插值间隔 (m)
         
         PlannerConfig() :
             spray_radius(SPRAY_RADIUS),
@@ -88,7 +93,10 @@ public:
             use_roll_for_translation(true),
             clipper_offset_precision(1.0), // 1m单位精度
             min_offset_segment_length(0.01),   // 1cm
-            use_clipper_offset(true) {}
+            use_clipper_offset(true),
+            normal_angle_threshold(0.26),  // 法向量平滑插值阈值，弧度制
+            enable_normal_smoothing(true),
+            resample_spacing(0.02) {}//步长，默认0.02m
     };
 
     PathPlanner(const PlannerConfig& config = PlannerConfig());
@@ -108,6 +116,7 @@ private:
     pcl::PointCloud<pcl::PointNormal>::Ptr original_cloud_;
     pcl::PointCloud<pcl::PointNormal>::Ptr processed_cloud_;
     bool model_loaded_;
+    Eigen::Vector3d model_center_;  // 模型中心点
     
     // 用于调试的轮廓存储
     std::vector<std::pair<double, std::vector<Eigen::Vector3d>>> alphashape_contours_;

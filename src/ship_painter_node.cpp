@@ -58,6 +58,10 @@ private:
         size_t current_waypoint_idx = 0;
         bool mission_complete = false;
         bool path_ready = false;
+        //路径变换信息
+        Eigen::Vector3d path_translation = Eigen::Vector3d::Zero();
+        double path_z_offset = 0.0;
+        bool path_transformed = false;
         
         // 控制参数
         double position_tolerance = 0.15;  // 位置容差 (m)
@@ -79,6 +83,7 @@ private:
     struct Parameters {
         std::string model_path;
         std::string frame_id = "world";
+        std::string mavros_ns = "/mavros";//话题名称，虚拟环境加组号iris_0
         
         // 路径位置
         double model_x = 5.0;
@@ -110,6 +115,9 @@ private:
         double yaw_gain = 0.8;
         double pitch_gain = 0.8;
         double roll_gain = 0.5;
+
+        double path_offset_distance = 3.0;//默认模型位置
+        bool traverse_clockwise = true;  // 遍历方向：true=顺时针，false=逆时针
     } params_;
     
     // 回调函数
@@ -161,14 +169,12 @@ private:
     bool generateSprayPath();
     void printMissionSummary();
     double calculateDistance(const geometry_msgs::Point& p1, const geometry_msgs::Point& p2);
-    double calculateOrientationError(const geometry_msgs::Quaternion& q1, 
-                                    const geometry_msgs::Quaternion& q2);
-    Eigen::Vector3d smoothPosition(const Eigen::Vector3d& target, 
-                                   const Eigen::Vector3d& current, 
-                                   double smoothing_factor);
-    Eigen::Quaterniond smoothOrientation(const Eigen::Quaterniond& target,
-                                         const Eigen::Quaterniond& current,
-                                         double smoothing_factor);
+    double calculateOrientationError(const geometry_msgs::Quaternion& q1, const geometry_msgs::Quaternion& q2);
+    Eigen::Vector3d smoothPosition(const Eigen::Vector3d& target, const Eigen::Vector3d& current, double smoothing_factor);
+    Eigen::Quaterniond smoothOrientation(const Eigen::Quaterniond& target,const Eigen::Quaterniond& current,double smoothing_factor);
+    //航点迁移到真实世界
+    void transformPathRelativeToDrone(double offset_distance);
+    void reorderLayersByProximity();
 };
 
 ShipPainterNode::ShipPainterNode() : nh_private_("~") {
@@ -178,17 +184,18 @@ ShipPainterNode::ShipPainterNode() : nh_private_("~") {
         return;
     }
     
+    
     // 设置订阅者
-    state_sub_ = nh_.subscribe("/iris_0/mavros/state", 10, 
+    state_sub_ = nh_.subscribe(params_.mavros_ns + "/state", 10, 
                                &ShipPainterNode::stateCallback, this);
-    pose_sub_ = nh_.subscribe("/iris_0/mavros/local_position/pose", 10, 
+    pose_sub_ = nh_.subscribe(params_.mavros_ns + "/local_position/pose", 10, 
                              &ShipPainterNode::poseCallback, this);
     
     // 设置发布者
     local_pos_pub_ = nh_.advertise<geometry_msgs::PoseStamped>(
-        "/iris_0/mavros/setpoint_position/local", 10);
+        params_.mavros_ns + "/setpoint_position/local", 10);
     setpoint_raw_pub_ = nh_.advertise<mavros_msgs::PositionTarget>(
-        "/iris_0/mavros/setpoint_raw/local", 10);
+        params_.mavros_ns + "/setpoint_raw/local", 10);
     
     path_vis_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(
         "/visualization/path", 10);
@@ -213,9 +220,9 @@ ShipPainterNode::ShipPainterNode() : nh_private_("~") {
     
     // 设置服务客户端
     set_mode_client_ = nh_.serviceClient<mavros_msgs::SetMode>(
-        "/iris_0/mavros/set_mode");
+        params_.mavros_ns + "/set_mode");
     arming_client_ = nh_.serviceClient<mavros_msgs::CommandBool>(
-        "/iris_0/mavros/cmd/arming");
+        params_.mavros_ns + "/cmd/arming");
     
     // 设置定时器
     vis_timer_ = nh_.createTimer(ros::Duration(0.1), 
@@ -229,7 +236,7 @@ ShipPainterNode::ShipPainterNode() : nh_private_("~") {
 
 bool ShipPainterNode::loadParameters() {
     nh_private_.param<std::string>("model_path", params_.model_path, "");
-    nh_private_.param<std::string>("frame_id", params_.frame_id, "world");
+    nh_private_.param<std::string>("frame_id", params_.frame_id, "map");
     
     nh_private_.param<double>("model_x", params_.model_x, 5.0);
     nh_private_.param<double>("model_y", params_.model_y, 0.0);
@@ -257,6 +264,13 @@ bool ShipPainterNode::loadParameters() {
     nh_private_.param<double>("display_model_x", params_.display_model_x, 4.0);
     nh_private_.param<double>("display_model_y", params_.display_model_y, 0.0);
     nh_private_.param<double>("display_model_z", params_.display_model_z, 1.0);
+
+    nh_private_.param("path_offset_distance", params_.path_offset_distance, 3.0);//真实世界中模型在无人机前方几米处
+    nh_private_.param("traverse_clockwise", params_.traverse_clockwise, true);  // 遍历方向
+    double resample_spacing_param;
+    nh_private_.param<double>("resample_spacing", resample_spacing_param, 0.02); // 步长
+
+    nh_private_.param<std::string>("mavros_ns", params_.mavros_ns, "/mavros");//命名空间，真机/虚拟
     
     if (params_.model_path.empty()) {
         ROS_ERROR("Model path is empty!");
@@ -273,6 +287,8 @@ bool ShipPainterNode::loadParameters() {
     planner_config.adaptive_pitch = true;
     planner_config.alpha_shape_value = alpha_value;
     planner_config.target_sample_count = static_cast<size_t>(sample_count); // 转换为size_t
+
+    planner_config.resample_spacing = resample_spacing_param;
     
     planner_ = PathPlanner(planner_config);
     
@@ -302,6 +318,21 @@ bool ShipPainterNode::generateSprayPath() {
     if (path_layers_.empty()) {
         ROS_ERROR("No path layers generated");
         return false;
+    }
+
+    ros::Rate wait_rate(10);
+    int wait_count = 0;
+    while (!flight_state_.pose_received && wait_count < 50) {
+        ros::spinOnce();
+        wait_rate.sleep();
+        wait_count++;
+    }
+    
+    if (flight_state_.pose_received) {
+        transformPathRelativeToDrone(params_.path_offset_distance);  // 3m偏移
+        reorderLayersByProximity();
+    } else {
+        ROS_WARN("Drone pose not available, using original path");
     }
     
     flight_state_.path_ready = true;
@@ -717,7 +748,7 @@ void ShipPainterNode::visualizationTimerCallback(const ros::TimerEvent& event) {
     publishModelVisualization();
     publishStatusVisualization();
     publishPointCloudVisualization();//点云可视化
-    // publishNormalVisualization();//法向量可视化
+    publishNormalVisualization();//法向量可视化
     publishAlphaShapeVisualization(); //as轮廓可视化
     publishOffsetContourVisualization();//偏移轮廓可视化
 }
@@ -931,18 +962,33 @@ void ShipPainterNode::publishAlphaShapeVisualization() {
         
         for (const auto& pt : contour) {
             geometry_msgs::Point p;
-            p.x = pt.x();
-            p.y = pt.y();
-            p.z = pt.z();
+            //变换
+            Eigen::Vector3d transformed_pt = pt;
+            if (flight_state_.path_transformed) {
+                transformed_pt += flight_state_.path_translation;
+                transformed_pt.z() += flight_state_.path_z_offset;
+            }
+            
+            p.x = transformed_pt.x();
+            p.y = transformed_pt.y();
+            p.z = transformed_pt.z();
             contour_marker.points.push_back(p);
         }
         
         // 确保轮廓闭合
         if (contour.size() > 2) {
             geometry_msgs::Point first_pt;
-            first_pt.x = contour[0].x();
-            first_pt.y = contour[0].y();
-            first_pt.z = contour[0].z();
+            
+            //应用变换
+            Eigen::Vector3d transformed_pt = contour[0];
+            if (flight_state_.path_transformed) {
+                transformed_pt += flight_state_.path_translation;
+                transformed_pt.z() += flight_state_.path_z_offset;
+            }
+            
+            first_pt.x = transformed_pt.x();
+            first_pt.y = transformed_pt.y();
+            first_pt.z = transformed_pt.z();
             contour_marker.points.push_back(first_pt);
         }
         
@@ -958,7 +1004,7 @@ void ShipPainterNode::publishOffsetContourVisualization() {
     
     visualization_msgs::MarkerArray marker_array;
     
-    ROS_INFO_THROTTLE(5, "Publishing %zu offset contours for visualization", offset_contours.size());
+    // ROS_INFO_THROTTLE(5, "Publishing %zu offset contours for visualization", offset_contours.size());
     
     for (size_t i = 0; i < offset_contours.size(); ++i) {
         const auto& layer_data = offset_contours[i];
@@ -986,21 +1032,37 @@ void ShipPainterNode::publishOffsetContourVisualization() {
         // 添加所有轮廓点
         for (const auto& pt : contour) {
             geometry_msgs::Point p;
-            p.x = pt.x();
-            p.y = pt.y();
-            p.z = pt.z() + 0.01; // 稍微抬高一点，避免与其他线条重叠
+            
+            //应用变换
+            Eigen::Vector3d transformed_pt = pt;
+            if (flight_state_.path_transformed) {
+                transformed_pt += flight_state_.path_translation;
+                transformed_pt.z() += flight_state_.path_z_offset;
+            }
+            
+            p.x = transformed_pt.x();
+            p.y = transformed_pt.y();
+            p.z = transformed_pt.z() + 0.01;
             contour_marker.points.push_back(p);
         }
-        
+
         // 确保轮廓闭合
         if (contour.size() > 2) {
             geometry_msgs::Point first_pt;
-            first_pt.x = contour[0].x();
-            first_pt.y = contour[0].y();
-            first_pt.z = contour[0].z() + 0.01;
+            
+            // 应用变换到闭合点
+            Eigen::Vector3d transformed_pt = contour[0];
+            if (flight_state_.path_transformed) {
+                transformed_pt += flight_state_.path_translation;
+                transformed_pt.z() += flight_state_.path_z_offset;
+            }
+            
+            first_pt.x = transformed_pt.x();
+            first_pt.y = transformed_pt.y();
+            first_pt.z = transformed_pt.z() + 0.01;
             contour_marker.points.push_back(first_pt);
         }
-        
+
         marker_array.markers.push_back(contour_marker);
         
         // 添加轮廓点标记（蓝色小球）
@@ -1021,15 +1083,23 @@ void ShipPainterNode::publishOffsetContourVisualization() {
         points_marker.color.a = 0.8;
         
         // 采样显示点（避免过于密集）
-        size_t step = std::max(1UL, contour.size() / 50);  // 最多显示50个点
+        size_t step = std::max(1UL, contour.size() / 50);
         for (size_t j = 0; j < contour.size(); j += step) {
             geometry_msgs::Point p;
-            p.x = contour[j].x();
-            p.y = contour[j].y();
-            p.z = contour[j].z() + 0.02; // 比线条再高一点
+            
+            //应用变换到球体点
+            Eigen::Vector3d transformed_pt = contour[j];
+            if (flight_state_.path_transformed) {
+                transformed_pt += flight_state_.path_translation;
+                transformed_pt.z() += flight_state_.path_z_offset;
+            }
+            
+            p.x = transformed_pt.x();
+            p.y = transformed_pt.y();
+            p.z = transformed_pt.z() + 0.02;
             points_marker.points.push_back(p);
         }
-        
+
         marker_array.markers.push_back(points_marker);
         
         // 添加层标签
@@ -1042,6 +1112,12 @@ void ShipPainterNode::publishOffsetContourVisualization() {
         
         // 在轮廓中心显示层信息
         Eigen::Vector3d center = computeContourCenter(contour);
+        //应用变换到中心点
+        if (flight_state_.path_transformed) {
+            center += flight_state_.path_translation;
+            center.z() += flight_state_.path_z_offset;
+        }
+
         text_marker.pose.position.x = center.x();
         text_marker.pose.position.y = center.y();
         text_marker.pose.position.z = center.z() + 0.1; // 高一点显示文字
@@ -1064,11 +1140,11 @@ void ShipPainterNode::publishOffsetContourVisualization() {
     offset_contour_vis_pub_.publish(marker_array);
     
     // 调试信息
-    static int debug_count = 0;
-    if (++debug_count % 100 == 0) {
-        ROS_INFO("Published offset contour visualization: %zu layers, %zu markers total",
-                 offset_contours.size(), marker_array.markers.size());
-    }
+    // static int debug_count = 0;
+    // if (++debug_count % 100 == 0) {
+    //     ROS_INFO("Published offset contour visualization: %zu layers, %zu markers total",
+    //              offset_contours.size(), marker_array.markers.size());
+    // }
 }
 // 辅助函数：计算轮廓中心（如果不存在的话）
 Eigen::Vector3d ShipPainterNode::computeContourCenter(const std::vector<Eigen::Vector3d>& contour) {
@@ -1195,9 +1271,9 @@ void ShipPainterNode::publishPointCloudVisualization() {
         }
         
         geometry_msgs::Point p;
-        p.x = point.x + params_.model_x;  // 应用模型位置偏移
-        p.y = point.y + params_.model_y;
-        p.z = point.z + params_.model_z;
+        p.x = point.x + params_.display_model_x;  // 应用模型位置偏移
+        p.y = point.y + params_.display_model_y;
+        p.z = point.z + params_.display_model_z;
         processed_marker.points.push_back(p);
     }
     
@@ -1233,9 +1309,9 @@ void ShipPainterNode::publishPointCloudVisualization() {
             }
             
             geometry_msgs::Point p;
-            p.x = point.x + params_.model_x;
-            p.y = point.y + params_.model_y;
-            p.z = point.z + params_.model_z;
+            p.x = point.x + params_.display_model_x;
+            p.y = point.y + params_.display_model_y;
+            p.z = point.z + params_.display_model_z;
             original_marker.points.push_back(p);
         }
         
@@ -1287,126 +1363,130 @@ void ShipPainterNode::publishPointCloudVisualization() {
     pointcloud_vis_pub_.publish(marker_array);
     
     // 打印调试信息（只在第一次或偶尔打印）
-    static int debug_counter = 0;
-    if (debug_counter % 50 == 0) {  // 每5秒打印一次（假设10Hz调用频率）
-        ROS_INFO_THROTTLE(5, "Publishing pointcloud visualization: %zu processed points,%zu original points",
-                         processed_cloud->size(), original_cloud ? original_cloud->size() : 0);
-    }
-    debug_counter++;
+    // static int debug_counter = 0;
+    // if (debug_counter % 50 == 0) {  // 每5秒打印一次（假设10Hz调用频率）
+    //     ROS_INFO_THROTTLE(5, "Publishing pointcloud visualization: %zu processed points,%zu original points",
+    //                      processed_cloud->size(), original_cloud ? original_cloud->size() : 0);
+    // }
+    // debug_counter++;
 }
 
 //法向量可视化函数
 void ShipPainterNode::publishNormalVisualization() {
-    
     visualization_msgs::MarkerArray marker_array;
-    
-    // 1. 显示点云法向量（绿色箭头）
+    int marker_id = 0;
+
+    // 辅助 lambda：判断是否近似纯X或纯Z向
+    auto is_near_axis_x_or_z = [](const Eigen::Vector3d& v)->bool {
+        Eigen::Vector3d n = v.normalized();
+        // 纯X (x ~ ±1, y,z ~ 0) 或 纯Z (z ~ ±1, x,y ~ 0)
+        bool pureX = (std::fabs(n.x()) > 0.99 && std::fabs(n.y()) < 0.1 && std::fabs(n.z()) < 0.1);
+        bool pureZ = (std::fabs(n.z()) > 0.99 && std::fabs(n.x()) < 0.1 && std::fabs(n.y()) < 0.1);
+        return pureX || pureZ;
+    };
+
+    // 1. 点云法向量（绿色箭头，采样）
     pcl::PointCloud<pcl::PointNormal>::Ptr processed_cloud = planner_.getProcessedCloud();
     if (processed_cloud && !processed_cloud->empty()) {
-        visualization_msgs::Marker pointcloud_normals;
-        pointcloud_normals.header.frame_id = params_.frame_id;
-        pointcloud_normals.header.stamp = ros::Time::now();
-        pointcloud_normals.ns = "pointcloud_normals";
-        pointcloud_normals.id = 0;
-        pointcloud_normals.type = visualization_msgs::Marker::LINE_LIST;
-        pointcloud_normals.action = visualization_msgs::Marker::ADD;
-        
-        pointcloud_normals.scale.x = 0.005;  // 箭杆直径
-        // pointcloud_normals.scale.y = 0.1;   // 箭头直径
-        // pointcloud_normals.scale.z = 0.1;   // 箭头长度
-        
-        pointcloud_normals.color.r = 0.0;
-        pointcloud_normals.color.g = 1.0;    // 绿色
-        pointcloud_normals.color.b = 0.0;
-        pointcloud_normals.color.a = 0.6;
-        
-        // 采样显示法向量（避免太密集）
-        size_t step = std::max(1UL, processed_cloud->size() / 1000);  // 最多显示1000个
+        size_t step = std::max(1UL, processed_cloud->size() / 1000); // 最多显示1000个
+        double normal_length = 0.05; // 5cm
+
         for (size_t i = 0; i < processed_cloud->size(); i += step) {
             const auto& point = processed_cloud->points[i];
-            
             if (!pcl::isFinite(point)) continue;
-            
-            // 法向量长度
-            double normal_length = 0.5;  // 5cm
-            
+
+            Eigen::Vector3d n(point.normal_x, point.normal_y, point.normal_z);
+            if (n.norm() < 1e-6) continue;
+            if (std::fabs(point.normal_x) < 1e-3 && std::fabs(point.normal_y) < 1e-3) continue; // 过滤/纯Z向
+
+            visualization_msgs::Marker arrow;
+            arrow.header.frame_id = params_.frame_id;
+            arrow.header.stamp = ros::Time::now();
+            arrow.ns = "pointcloud_normals";
+            arrow.id = marker_id++;
+            arrow.type = visualization_msgs::Marker::ARROW;
+            arrow.action = visualization_msgs::Marker::ADD;
+            arrow.scale.x = 0.005; // 箭杆直径
+            arrow.scale.y = 0.01;  // 箭头宽
+            arrow.scale.z = 0.01;  // 箭头长
+            arrow.color.r = 0.0;
+            arrow.color.g = 1.0;
+            arrow.color.b = 0.0;
+            arrow.color.a = 0.6;
+
             geometry_msgs::Point start, end;
             start.x = point.x + params_.model_x;
             start.y = point.y + params_.model_y;
             start.z = point.z + params_.model_z;
-            
-            end.x = start.x + point.normal_x * normal_length;
-            end.y = start.y + point.normal_y * normal_length;
-            end.z = start.z + point.normal_z * normal_length;
-            
-            pointcloud_normals.points.push_back(start);
-            pointcloud_normals.points.push_back(end);
+
+            Eigen::Vector3d end_e = Eigen::Vector3d(start.x, start.y, start.z) + n.normalized() * normal_length;
+            end.x = end_e.x(); end.y = end_e.y(); end.z = end_e.z();
+
+            arrow.points.clear();
+            arrow.points.push_back(start);
+            arrow.points.push_back(end);
+
+            marker_array.markers.push_back(arrow);
         }
-        
-        if (!pointcloud_normals.points.empty()) {
-            marker_array.markers.push_back(pointcloud_normals);
-        }
-        // ROS_INFO("Publishing %zu normal arrows", pointcloud_normals.points.size()/2);
     }
-    
-    // 2. 显示路径点法向量（蓝色箭头）
+
+    // 2. 路径点法向量（蓝色箭头，过滤纯X/纯Z）
     if (flight_state_.path_ready && !path_layers_.empty()) {
-        visualization_msgs::Marker waypoint_normals;
-        waypoint_normals.header.frame_id = params_.frame_id;
-        waypoint_normals.header.stamp = ros::Time::now();
-        waypoint_normals.ns = "waypoint_normals";
-        waypoint_normals.id = 1;
-        waypoint_normals.type = visualization_msgs::Marker::LINE_LIST;
-        waypoint_normals.action = visualization_msgs::Marker::ADD;
-        
-        waypoint_normals.scale.x = 0.008;   // 稍粗一点
-        // waypoint_normals.scale.y = 0.15;
-        // waypoint_normals.scale.z = 0.15;
-        
-        waypoint_normals.color.r = 0.0;
-        waypoint_normals.color.g = 0.0;
-        waypoint_normals.color.b = 1.0;    // 蓝色
-        waypoint_normals.color.a = 0.8;
-        
-        // 显示所有层的航点法向量
+        double wp_normal_length = 0.08; // 8cm
+
         for (const auto& layer : path_layers_) {
             for (const auto& wp : layer.waypoints) {
-                double normal_length = 0.8;  // 8cm，比点云法向量长一些
-                
+                Eigen::Vector3d n = wp.surface_normal;
+                if (n.norm() < 1e-6) continue;
+                // if (is_near_axis_x_or_z(n)) continue; // 过滤
+
+                visualization_msgs::Marker arrow;
+                arrow.header.frame_id = params_.frame_id;
+                arrow.header.stamp = ros::Time::now();
+                arrow.ns = "waypoint_normals";
+                arrow.id = marker_id++;
+                arrow.type = visualization_msgs::Marker::ARROW;
+                arrow.action = visualization_msgs::Marker::ADD;
+                arrow.scale.x = 0.008;
+                arrow.scale.y = 0.02;
+                arrow.scale.z = 0.02;
+                arrow.color.r = 0.0;
+                arrow.color.g = 0.0;
+                arrow.color.b = 1.0;
+                arrow.color.a = 0.8;
+
                 geometry_msgs::Point start, end;
                 start.x = wp.position.x();
                 start.y = wp.position.y();
                 start.z = wp.position.z();
-                
-                end.x = start.x + wp.surface_normal.x() * normal_length;
-                end.y = start.y + wp.surface_normal.y() * normal_length;
-                end.z = start.z + wp.surface_normal.z() * normal_length;
-                
-                waypoint_normals.points.push_back(start);
-                waypoint_normals.points.push_back(end);
+
+                Eigen::Vector3d end_e = Eigen::Vector3d(start.x, start.y, start.z) + n.normalized() * wp_normal_length;
+                end.x = end_e.x(); end.y = end_e.y(); end.z = end_e.z();
+
+                arrow.points.clear();
+                arrow.points.push_back(start);
+                arrow.points.push_back(end);
+
+                marker_array.markers.push_back(arrow);
             }
         }
-        
-        if (!waypoint_normals.points.empty()) {
-            marker_array.markers.push_back(waypoint_normals);
-        }
     }
-    
+
     normal_vis_pub_.publish(marker_array);
-    
-    // 调试信息
+
     static int debug_counter = 0;
     if (debug_counter % 100 == 0) {
-        ROS_INFO_THROTTLE(10, "Publishing normal vectors visualization");
+        ROS_INFO_THROTTLE(10, "Publishing normal vectors visualization (arrows): %zu markers", marker_array.markers.size());
     }
     debug_counter++;
 }
+
 
 // 主要任务执行函数保持不变...
 bool ShipPainterNode::waitForConnection() {
     ROS_INFO("Waiting for MAVROS connection...");
     ros::Rate rate(20);
-    for (int i = 0; i < 100; ++i) {
+    for (int i = 0; i < 1000; ++i) {
         if (flight_state_.mavros_state.connected) {
             ROS_INFO("MAVROS connected!");
             return true;
@@ -1488,13 +1568,50 @@ void ShipPainterNode::run() {
         return;
     }
     
-    // 2. 等待位置数据
-    ROS_INFO("Waiting for position data...");
+    // 等待位置数据和EKF2初始化
+    ROS_INFO("Waiting for position data and EKF2 initialization...");
     ros::Rate rate(20);
-    while (ros::ok() && !flight_state_.home_set) {
+    ros::Time ekf_wait_start = ros::Time::now();
+    bool ekf_ready = false;
+
+    while (ros::ok() && !ekf_ready) {
         ros::spinOnce();
+        
+        if (flight_state_.pose_received) {
+            // 检查高度是否合理（应该接近0，允许±.5米的误差）
+            double current_height = flight_state_.current_pose.pose.position.z;
+            if (fabs(current_height) < 1.5) {
+                ekf_ready = true;
+                ROS_INFO("EKF2 initialized! Current position: (%.2f, %.2f, %.2f)", 
+                        flight_state_.current_pose.pose.position.x,
+                        flight_state_.current_pose.pose.position.y,
+                        flight_state_.current_pose.pose.position.z);
+            } else {
+                // 每5秒打印一次当前高度
+                static ros::Time last_warn = ros::Time::now();
+                if ((ros::Time::now() - last_warn).toSec() > 5.0) {
+                    ROS_WARN("Waiting for EKF2... Current height: %.2f m (should be near 0)", 
+                            current_height);
+                    last_warn = ros::Time::now();
+                }
+            }
+        }
+        
+        // 超时检查（30秒）
+        if ((ros::Time::now() - ekf_wait_start).toSec() > 30.0) {
+            ROS_ERROR("EKF2 initialization timeout! Current height: %.2f m", 
+                    flight_state_.current_pose.pose.position.z);
+            ROS_ERROR("Please check:");
+            ROS_ERROR("  1. Is the drone on a flat surface?");
+            ROS_ERROR("  2. Is GPS signal good?");
+            ROS_ERROR("  3. Try increasing the launch delay time.");
+            return;
+        }
+        
         rate.sleep();
     }
+
+    ROS_INFO("First pose received");
     
     // 3. 生成喷涂路径
     if (!generateSprayPath()) {
@@ -1581,6 +1698,8 @@ void ShipPainterNode::run() {
             flight_state_.total_waypoints_reached);
 }
 
+
+
 int main(int argc, char** argv) {
     ros::init(argc, argv, "ship_painter_node");
     
@@ -1592,4 +1711,258 @@ int main(int argc, char** argv) {
     }
     
     return 0;
+}
+
+//无人机在真实世界对应函数
+void ShipPainterNode::transformPathRelativeToDrone(double offset_distance) {
+    if (!flight_state_.pose_received) {
+        ROS_WARN("Drone pose not received, cannot transform path");
+        return;
+    }
+    
+    if (path_layers_.empty()) {
+        ROS_WARN("No path layers to transform");
+        return;
+    }
+    
+    // 获取无人机当前位置
+    Eigen::Vector3d drone_pos(
+        flight_state_.current_pose.pose.position.x,
+        flight_state_.current_pose.pose.position.y,
+        flight_state_.current_pose.pose.position.z
+    );
+    
+    // 获取无人机yaw角
+    tf2::Quaternion q(
+        flight_state_.current_pose.pose.orientation.x,
+        flight_state_.current_pose.pose.orientation.y,
+        flight_state_.current_pose.pose.orientation.z,
+        flight_state_.current_pose.pose.orientation.w
+    );
+    tf2::Matrix3x3 m(q);
+    double roll, pitch, yaw;
+    m.getRPY(roll, pitch, yaw);
+    
+    // 机头方向单位向量
+    Eigen::Vector3d heading_dir(cos(yaw), sin(yaw), 0);
+    
+    // 第一步：对中无人机（y方向）
+    // 计算所有航点的y坐标平均值
+    double sum_y = 0.0;
+    size_t total_waypoints = 0;
+    
+    for (const auto& layer : path_layers_) {
+        for (const auto& wp : layer.waypoints) {
+            sum_y += wp.position.y();
+            total_waypoints++;
+        }
+    }
+    
+    if (total_waypoints == 0) {
+        ROS_WARN("No waypoints found to transform");
+        return;
+    }
+    
+    double avg_y = sum_y / total_waypoints;
+    double y_offset = avg_y - drone_pos.y();  // 航点集中心相对无人机的y偏移
+    
+    // 对所有航点的y坐标减去这个偏移量，实现对中
+    for (auto& layer : path_layers_) {
+        for (auto& wp : layer.waypoints) {
+            wp.position.y() -= y_offset;
+        }
+    }
+    
+    ROS_INFO("Path centered: y_offset = %.3f m (waypoints avg_y: %.3f, drone_y: %.3f)", 
+             y_offset, avg_y, drone_pos.y());
+    
+    // 第二步：将航点集移动到无人机前方指定距离
+    // 找到所有航点中在机头方向上最近的点
+    double min_forward_dist = std::numeric_limits<double>::max();
+    Eigen::Vector3d closest_waypoint_pos;
+    bool found = false;
+    
+    for (const auto& layer : path_layers_) {
+        for (const auto& wp : layer.waypoints) {
+            Eigen::Vector3d rel_vec = wp.position - drone_pos;
+            double forward_dist = rel_vec.dot(heading_dir);
+            
+            if (forward_dist < min_forward_dist) {
+                min_forward_dist = forward_dist;
+                closest_waypoint_pos = wp.position;
+                found = true;
+            }
+        }
+    }
+    
+    if (!found) {
+        ROS_WARN("No waypoints found to transform");
+        return;
+    }
+    
+    // 计算平移向量
+    Eigen::Vector3d target_pos = drone_pos + heading_dir * offset_distance;
+    target_pos.z() = closest_waypoint_pos.z();  // 保留原路径高度
+    Eigen::Vector3d translation = target_pos - closest_waypoint_pos;
+    
+    // 对所有航点应用平移
+    for (auto& layer : path_layers_) {
+        for (auto& wp : layer.waypoints) {
+            wp.position += translation;
+            wp.position.z() += flight_state_.home_pose.pose.position.z;
+        }
+    }
+    //储存变换信息
+    flight_state_.path_translation = translation;
+    flight_state_.path_z_offset = flight_state_.home_pose.pose.position.z;
+    flight_state_.path_transformed = true;
+    
+    ROS_INFO("Path transformed: closest waypoint moved to %.2fm forward", offset_distance);
+    ROS_INFO("Translation: [%.2f, %.2f, %.2f] m", 
+             translation.x(), translation.y(), translation.z());
+}
+
+void ShipPainterNode::reorderLayersByProximity() {
+    if (path_layers_.empty()) {
+        ROS_WARN("No path layers to reorder");
+        return;
+    }
+    
+    if (!flight_state_.pose_received) {
+        ROS_WARN("Drone pose not received, cannot reorder");
+        return;
+    }
+    
+    // 获取无人机位置
+    Eigen::Vector3d drone_pos(
+        flight_state_.current_pose.pose.position.x,
+        flight_state_.current_pose.pose.position.y,
+        flight_state_.current_pose.pose.position.z
+    );
+    
+    // 按z坐标从大到小排序层（最高层在前）
+    std::sort(path_layers_.begin(), path_layers_.end(),
+              [](const PathPlanner::PathLayer& a, const PathPlanner::PathLayer& b) {
+                  return a.z_center > b.z_center;
+              });
+    
+    ROS_INFO("Layers sorted by height: %zu layers, top layer z=%.2f", 
+             path_layers_.size(), path_layers_[0].z_center);
+    
+    // 辅助函数：计算层中心
+    auto computeLayerCenter = [](const std::vector<PathPlanner::Waypoint>& waypoints) -> Eigen::Vector3d {
+        Eigen::Vector3d center(0, 0, 0);
+        for (const auto& wp : waypoints) {
+            center += wp.position;
+        }
+        return center / waypoints.size();
+    };
+    
+    // 辅助函数：按角度排序航点（从+Z向下看）
+    auto reorderByAngle = [](std::vector<PathPlanner::Waypoint>& waypoints, 
+                            const Eigen::Vector3d& center, 
+                            size_t start_idx,
+                            bool clockwise) {
+        if (waypoints.empty()) return;
+        
+        // 计算所有点相对于中心的角度
+        std::vector<std::pair<double, size_t>> angles;
+        for (size_t i = 0; i < waypoints.size(); ++i) {
+            Eigen::Vector3d rel = waypoints[i].position - center;
+            double angle = atan2(rel.y(), rel.x());
+            angles.push_back({angle, i});
+        }
+        
+        // 找到起始点的角度
+        double start_angle = angles[start_idx].first;
+        
+        // 调整所有角度，使起始点角度为0
+        for (auto& ap : angles) {
+            ap.first -= start_angle;
+            // 归一化到 [0, 2π)
+            while (ap.first < 0) ap.first += 2 * M_PI;
+            while (ap.first >= 2 * M_PI) ap.first -= 2 * M_PI;
+        }
+        
+        // 根据方向排序
+        if (clockwise) {
+            // 顺时针：从+Z向下看，角度递减
+            // 但我们的angle是从0开始的，所以用负角度排序
+            std::sort(angles.begin(), angles.end(),
+                     [](const std::pair<double, size_t>& a, const std::pair<double, size_t>& b) {
+                         return a.first < b.first;  // 小角度在前
+                     });
+        } else {
+            // 逆时针：角度递增
+            std::sort(angles.begin(), angles.end(),
+                     [](const std::pair<double, size_t>& a, const std::pair<double, size_t>& b) {
+                         return a.first < b.first;
+                     });
+        }
+        
+        // 重新排序航点
+        std::vector<PathPlanner::Waypoint> reordered;
+        for (const auto& ap : angles) {
+            reordered.push_back(waypoints[ap.second]);
+        }
+        waypoints = reordered;
+    };
+    
+    // 处理第一层（最高层）
+    if (!path_layers_[0].waypoints.empty()) {
+        auto& first_layer = path_layers_[0].waypoints;
+        
+        // 找到离无人机最近的点
+        size_t closest_idx = 0;
+        double min_dist = std::numeric_limits<double>::max();
+        
+        for (size_t i = 0; i < first_layer.size(); ++i) {
+            double dist = (first_layer[i].position - drone_pos).norm();
+            if (dist < min_dist) {
+                min_dist = dist;
+                closest_idx = i;
+            }
+        }
+        
+        // 计算层中心
+        Eigen::Vector3d layer_center = computeLayerCenter(first_layer);
+        
+        // 按全局方向排序
+        reorderByAngle(first_layer, layer_center, closest_idx, params_.traverse_clockwise);
+        
+        ROS_INFO("Layer 0 reordered: start from closest point (was index %zu), direction: %s",
+                 closest_idx, params_.traverse_clockwise ? "clockwise" : "counterclockwise");
+    }
+    
+    // 处理后续层
+    for (size_t layer_idx = 1; layer_idx < path_layers_.size(); ++layer_idx) {
+        auto& current_layer = path_layers_[layer_idx].waypoints;
+        if (current_layer.empty()) continue;
+        
+        // 获取上一层的第一个点（闭合点）
+        const auto& prev_layer_first_point = path_layers_[layer_idx - 1].waypoints[0].position;
+        
+        // 找到离上一层第一个点最近的点
+        size_t closest_idx = 0;
+        double min_dist = std::numeric_limits<double>::max();
+        
+        for (size_t i = 0; i < current_layer.size(); ++i) {
+            double dist = (current_layer[i].position - prev_layer_first_point).norm();
+            if (dist < min_dist) {
+                min_dist = dist;
+                closest_idx = i;
+            }
+        }
+        
+        // 计算层中心
+        Eigen::Vector3d layer_center = computeLayerCenter(current_layer);
+        
+        // 按全局方向排序
+        reorderByAngle(current_layer, layer_center, closest_idx, params_.traverse_clockwise);
+        
+        ROS_INFO("Layer %zu reordered: start from point closest to prev layer (was index %zu)",
+                 layer_idx, closest_idx);
+    }
+    
+    ROS_INFO("All layers reordered successfully");
 }

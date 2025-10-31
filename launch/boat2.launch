@@ -1,37 +1,47 @@
 <launch>
     
+    <arg name="traverse_clockwise" default="true"/><!--true顺时针，false逆时针-->
     <!-- 启动路径规划节点 -->
     <group ns="iris_0">
         <node name="ship_painter_node" pkg="ship_painter" type="ship_painter_node" output="screen">
+            <!--虚拟环境话题-->
+            <param name="mavros_ns" value="/iris_0/mavros"/>
             <!-- STL模型路径 -->
-            <param name="model_path" value="$(find ship_painter)/models/test.stl"/>
+            <param name="model_path" value="$(find ship_painter)/models/model4cube.stl"/>
 
             <!-- 路径规划参数 -->
-            <param name="alpha_shape_value" value="2"/>
-            <param name="target_sample_count" value="100000"/>
+            <param name="alpha_shape_value" value="0.5"/>
+            <param name="target_sample_count" value="500000"/>
+            <param name="path_offset_distance" value="3.0"/> <!--真实世界中模型位于无人机前方几米处-->
+            <!--步长设置-->
+            <param name="resample_spacing" value="0.1" type="double" />
                 
             <!-- rviz中模型位置显示参数 -->
-            <param name="display_model_x" value="0"/>
-            <param name="display_model_y" value="-2.5"/>
+            <param name="display_model_x" value="3.75"/>
+            <param name="display_model_y" value="-0.56"/>
             <param name="display_model_z" value="0"/>
             
             <!-- 喷涂参数 -->
             <param name="spray_distance" value="0.5"/>
             <param name="layer_height" value="0.25"/>
 
+            <!-- 航点遍历方向参数 -->
+            <param name="/ship_painter/traverse_clockwise" value="$(arg traverse_clockwise)"/>
+
             <!-- 点云可视化设置 -->
             <param name="enable_spray_visualization" value="true"/>
 
-            <!-- 强制启用Clipper -->
+            <!-- Clipper -->
             <param name="use_clipper_offset" value="true"/>
             <param name="clipper_offset_precision" value="1.0"/>
             <param name="min_offset_segment_length" value="0.001"/>
-            
-            <!-- 路径规划参数 - 针对3D法向偏移 -->
-            <param name="offset_distance" value="0.5"/>     <!-- 偏移距离 -->
+            <!--法向量平滑插值是否开启-->
+            <param name="enable_normal_smoothing" value="false"/>
             
             <!-- 法向量估计参数 -->
-            <param name="voxel_resolution" value="0.03"/>    <!-- 体素大小 -->
+            <param name="voxel_resolution" value="0.03"/>    <!-- 体素大小0.03 -->
+            <!-- 姿态控制参数 -->
+            <param name="use_position_control" value="true"/>
             
             <!-- 飞行参数 - 针对姿态控制优化 -->
             <param name="takeoff_height" value="2.0"/>

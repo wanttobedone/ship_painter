@@ -1,0 +1,37 @@
+<launch>
+    <!-- 设置无人机型号 -->
+    <env name="PX4_SIM_MODEL" value="iris" />
+    
+    <!-- 添加模型路径到Gazebo环境变量 -->
+    <env name="GAZEBO_MODEL_PATH" value="$(find ship_painter)/models:$(optenv GAZEBO_MODEL_PATH)" />
+    
+    <!-- PX4 启动配置 -->
+    <include file="/home/demo/PX4_Firmware/launch/indoor1.launch">
+        <arg name="world" value="$(find ship_painter)/worlds/ship.world"/>
+    </include>
+    
+    <!-- 定义船体模型位置参数（统一管理） -->
+    <arg name="ship_x" default="4.08"/>
+    <arg name="ship_y" default="6.7"/>
+    <arg name="ship_z" default="0.125"/>
+    
+    <!-- 生成船体模型 -->
+    <node name="spawn_ship" pkg="gazebo_ros" type="spawn_model" 
+          args="-sdf -file $(find ship_painter)/models/model4cube.sdf -model boat1 
+                -x $(arg ship_x) 
+                -y $(arg ship_y) 
+                -z $(arg ship_z)" 
+          launch-prefix="bash -c 'sleep 5; $0 $@' " 
+          output="screen">
+        <!-- 输出生成位置信息 -->
+        <param name="model_x" value="$(arg ship_x)"/>
+        <param name="model_y" value="$(arg ship_y)"/>
+        <param name="model_z" value="$(arg ship_z)"/>
+    </node>
+    
+    <!-- 将模型位置保存到参数服务器，供其他节点使用 -->
+    <param name="/ship_model/x" value="$(arg ship_x)"/>
+    <param name="/ship_model/y" value="$(arg ship_y)"/>
+    <param name="/ship_model/z" value="$(arg ship_z)"/>
+    
+</launch>

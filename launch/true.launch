@@ -1,0 +1,73 @@
+<launch>
+    <!-- 真机测试,通过WiFi连接Pixhawk,ESP8266配置：IP 192.168.4.1, Port 14550； raspberry pi：ACM0 -->
+    
+    <!-- 航点遍历方向参数 -->
+    <arg name="traverse_clockwise" default="true"/><!--true顺时针，false逆时针-->
+    
+    <!-- WiFi连接参数 -->
+    <arg name="fcu_url" default="udp://:14550@192.168.4.1:14550"/>
+    
+    <!--启动MAVROS-->
+    <include file="$(find mavros)/launch/px4.launch">
+        <arg name="fcu_url" value="$(arg fcu_url)"/>
+        <arg name="gcs_url" value=""/>
+        <arg name="tgt_system" value="1"/>
+        <arg name="tgt_component" value="1"/>
+    </include>
+    
+    <!--启动ship_painter节点（延迟5秒启动-->
+    <node name="ship_painter_node" pkg="ship_painter" type="ship_painter_node" output="screen"
+        launch-prefix="bash -c 'sleep 5; $0 $@'">
+        <param name="mavros_ns" value="/mavros"/><!--真机话题-->
+        
+        <!-- STL模型路径 -->
+        <param name="model_path" value="$(find ship_painter)/models/test.stl"/>
+        
+        <!-- 路径规划参数 -->
+        <param name="alpha_shape_value" value="1.5"/>
+        <param name="target_sample_count" value="500000"/>
+        <param name="path_offset_distance" value="3.0"/> <!--真实世界中模型位于无人机前方几米处-->
+        <!--控制模式参数-->
+        <param name="use_position_control" value="true"/>
+        
+        <!-- 步长设置 -->
+        <param name="resample_spacing" value="0.5" type="double" />
+            
+        <!-- rviz中模型位置显示参数 -->
+        <param name="display_model_x" value="3.75"/>
+        <param name="display_model_y" value="0"/>
+        <param name="display_model_z" value="0"/>
+        
+        <!-- 喷涂参数 -->
+        <param name="spray_distance" value="0.5"/>
+        <param name="layer_height" value="0.25"/>
+        
+        <!-- 航点遍历方向参数 -->
+        <param name="/ship_painter/traverse_clockwise" value="$(arg traverse_clockwise)"/>
+        
+        <!-- 点云可视化设置 -->
+        <param name="enable_spray_visualization" value="true"/>
+        
+        <!-- Clipper -->
+        <param name="use_clipper_offset" value="true"/>
+        <param name="clipper_offset_precision" value="1.0"/>
+        <param name="min_offset_segment_length" value="0.001"/>
+        
+        <!-- 法向量平滑插值是否开启 -->
+        <param name="enable_normal_smoothing" value="false"/>
+        
+        <!-- 法向量估计参数 -->
+        <param name="voxel_resolution" value="0.03"/>    <!-- 体素大小0.03 -->
+        
+        <!--飞行参数-->
+        <param name="takeoff_height" value="2.0"/>           <!-- 起飞高度：2米 -->
+        <param name="flight_speed" value="0.5"/>             <!-- 飞行速度：0.5m/s -->
+        <param name="waypoint_tolerance" value="0.3"/>       <!-- 位置容差：0.3米 -->
+        
+        <param name="frame_id" value="world"/>
+    </node>
+
+        <!-- 启动 RViz 可视化 -->
+    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find ship_painter)/rviz/true_ship_painter.rviz"/>
+    
+</launch>

@@ -24,7 +24,7 @@
 #include <limits>
 
 PathPlanner::PathPlanner(const PlannerConfig& config) 
-    : config_(config), model_loaded_(false) {
+    : config_(config), model_loaded_(false), model_center_(Eigen::Vector3d::Zero()) {
     original_cloud_.reset(new pcl::PointCloud<pcl::PointNormal>);
     processed_cloud_.reset(new pcl::PointCloud<pcl::PointNormal>);
     alphashape_contours_.clear();
@@ -105,6 +105,16 @@ std::vector<PathPlanner::PathLayer> PathPlanner::generateSprayPath(const Eigen::
     
     ROS_INFO("Model bounds after transform: X[%.3f, %.3f], Y[%.3f, %.3f], Z[%.3f, %.3f]",
              min_pt.x, max_pt.x, min_pt.y, max_pt.y, min_pt.z, max_pt.z);
+
+    // 计算模型中心（所有点的质心）
+    model_center_ = Eigen::Vector3d::Zero();
+    for (const auto& pt : transformed_cloud->points) {
+        model_center_ += Eigen::Vector3d(pt.x, pt.y, pt.z);
+    }
+    model_center_ /= processed_cloud_->size();
+    
+    ROS_INFO("Model center: [%.2f, %.2f, %.2f]", 
+             model_center_.x(), model_center_.y(), model_center_.z());
     
     std::vector<double> layer_heights = computeLayerHeights(min_pt.z, max_pt.z);
     
@@ -114,7 +124,7 @@ std::vector<PathPlanner::PathLayer> PathPlanner::generateSprayPath(const Eigen::
         double z_center = layer_heights[i];
         
         pcl::PointCloud<pcl::PointNormal>::Ptr layer_cloud = 
-            extractLayerPoints(transformed_cloud, z_center, 0.1);//同层高度的点，容忍度为0.1
+            extractLayerPoints(transformed_cloud, z_center, 0.05);//同层高度的点，容忍度为0.05
         
         if (layer_cloud->size() < config_.min_points_per_layer) {
             ROS_WARN("Layer %zu at z=%.3f has too few points (%zu), skipping",
@@ -149,29 +159,9 @@ std::vector<PathPlanner::Waypoint> PathPlanner::generateLayerPath(pcl::PointClou
     
     if (layer_cloud->empty()) return waypoints;
 
-    //X向调试信息
-    if (!layer_cloud->empty()) {
-        double min_x = std::numeric_limits<double>::max();
-        double max_x = std::numeric_limits<double>::lowest();
-        double min_y = std::numeric_limits<double>::max();
-        double max_y = std::numeric_limits<double>::lowest();
-        
-        for (const auto& pt : layer_cloud->points) {
-            min_x = std::min(min_x, (double)pt.x);
-            max_x = std::max(max_x, (double)pt.x);
-            min_y = std::min(min_y, (double)pt.y);
-            max_y = std::max(max_y, (double)pt.y);
-        }
-        
-        ROS_INFO("=== Layer z=%.3f Debug Info ===", z_center);
-        ROS_INFO("  Total points in layer: %zu", layer_cloud->size());
-        ROS_INFO("  X range: [%.3f, %.3f] (width: %.3f)", min_x, max_x, max_x - min_x);
-        ROS_INFO("  Y range: [%.3f, %.3f] (height: %.3f)", min_y, max_y, max_y - min_y);
-    }
-    
-    ROS_INFO("=== CLIPPER PATH GENERATION START ===");
-    ROS_INFO("Generating path for layer with %zu points at z=%.3f", 
-             layer_cloud->size(), z_center);
+    // ROS_INFO("=== CLIPPER PATH GENERATION START ===");
+    // ROS_INFO("Generating path for layer with %zu points at z=%.3f", 
+    //          layer_cloud->size(), z_center);
     
     // 1. 使用Alpha Shape提取轮廓
     double alpha = config_.alpha_shape_value;
@@ -201,83 +191,49 @@ std::vector<PathPlanner::Waypoint> PathPlanner::generateLayerPath(pcl::PointClou
     double contour_width = max_x - min_x;
     double contour_height = max_y - min_y;
     
-    ROS_INFO("Original contour dimensions: %.3f x %.3f", contour_width, contour_height);
-    ROS_INFO("Center: (%.3f, %.3f)", (min_x + max_x) / 2, (min_y + max_y) / 2);
+    // ROS_INFO("Original contour dimensions: %.3f x %.3f", contour_width, contour_height);
+    // ROS_INFO("Center: (%.3f, %.3f)", (min_x + max_x) / 2, (min_y + max_y) / 2);
 
-    // 2. 使用Clipper进行轮廓偏移，但使用渐进式偏移
-    ROS_INFO("Starting progressive Clipper offsetting...");
-    
-    std::vector<Eigen::Vector3d> spray_positions;
-    
-    // 如果偏移距离很大，尝试分步偏移
-    double target_offset = config_.spray_distance;
-    if (target_offset > std::min(contour_width, contour_height) * 0.3) {
-        ROS_WARN("⚠️ Large offset detected, using progressive offsetting");
-        
-        // 分步偏移：每步最多偏移轮廓尺寸的20%
-        double max_step = std::min(contour_width, contour_height) * 0.2;
-        std::vector<Eigen::Vector3d> current_contour = original_contour;
-        double remaining_offset = target_offset;
-        
-        while (remaining_offset > 1e-6 && !current_contour.empty()) {
-            double step_offset = std::min(remaining_offset, max_step);
-            
-            ROS_INFO("   Progressive step: %.3f m (remaining: %.3f m)", 
-                     step_offset, remaining_offset);
-            
-            std::vector<Eigen::Vector3d> step_result = offsetContourWithClipper(
-                current_contour, step_offset, z_center);
-            
-            if (step_result.empty()) {
-                ROS_WARN("   Step failed, stopping progressive offset");
-                break;
-            }
-            
-            current_contour = step_result;
-            remaining_offset -= step_offset;
-        }
-        
-        spray_positions = current_contour;
-        
-    } else {
-        // 一步偏移
-        spray_positions = offsetContourWithClipper(
-            original_contour, target_offset, z_center);
-    }
-    
+    // 2. 使用Clipper进行轮廓偏移
+    ROS_INFO("Performing Clipper offset of %.3f m ...", config_.spray_distance);
+
+    std::vector<Eigen::Vector3d> spray_positions = offsetContourWithClipper(
+        original_contour,
+        config_.spray_distance,
+        z_center);
+
     if (spray_positions.size() < 3) {
         ROS_ERROR("CLIPPER OFFSET FAILED! Generated only %zu points", spray_positions.size());
-        ROS_ERROR("Original contour: %zu points, %.3f x %.3f", 
-                  original_contour.size(), contour_width, contour_height);
-        ROS_ERROR("Target offset: %.3f m", target_offset);
+        ROS_ERROR("Original contour: %zu points", original_contour.size());
+        ROS_ERROR("Target offset: %.3f m", config_.spray_distance);
         return waypoints;
     }
-    
-    ROS_INFO("Clipper offset successful: %zu -> %zu points", 
-             original_contour.size(), spray_positions.size());
+
+    ROS_INFO("Clipper offset successful: %zu -> %zu points",
+            original_contour.size(), spray_positions.size());
+
     
     // *** 保存偏移后的轮廓用于调试可视化 ***
     offset_contours_.push_back({z_center, spray_positions});
+    spray_positions = smoothContourAdaptive(spray_positions, 1);//平滑路径，暂时不用
+    std::vector<Eigen::Vector3d> normals = recomputeNormalsForOffsetContour(spray_positions, original_contour, layer_cloud);
     
-    // 3. 继续后续处理...
-    ROS_INFO("Recomputing normals for offset contour...");
-    std::vector<Eigen::Vector3d> normals = recomputeNormalsForOffsetContour(
-        spray_positions, original_contour, layer_cloud);
-    
-    // 4. 验证偏移后的轮廓
+    // 验证偏移后的轮廓
     if (!isValidContour(spray_positions)) {
         ROS_WARN("Contour has self-intersections at layer z=%.3f, but continuing without fix", z_center);
     }
     
-    // 5. 后续处理...
-    spray_positions = smoothContourAdaptive(spray_positions, 1);
     waypoints = createWaypointsFromContour(spray_positions, normals, z_center);
     waypoints = optimizeWaypointDistribution(waypoints);
     computeOrientations(waypoints);
 
-    ROS_INFO("=== CLIPPER PATH GENERATION COMPLETE ===");
-    ROS_INFO("Final result: %zu waypoints for layer at z=%.3f", waypoints.size(), z_center);
+    ROS_INFO("CLIPPER result: %zu waypoints for layer at z=%.3f", waypoints.size(), z_center);
     
+    if (config_.enable_normal_smoothing) {
+        waypoints = optimizeWaypointDistribution(waypoints);
+        // 重新计算插值后航点的姿态
+        computeOrientations(waypoints);
+    }
     return waypoints;
 }
 
@@ -382,7 +338,7 @@ std::vector<Eigen::Vector3d> PathPlanner::extractAlphaShapeContour(pcl::PointClo
     // 保存原始轮廓用于可视化
     alphashape_contours_.push_back({z_center, contour});
 
-    // === 调试信息：显示Alpha Shape提取结果 ===
+    // 显示Alpha Shape提取结果
     if (!contour.empty()) {
         double min_x_contour = std::numeric_limits<double>::max();
         double max_x_contour = std::numeric_limits<double>::lowest();
@@ -392,10 +348,8 @@ std::vector<Eigen::Vector3d> PathPlanner::extractAlphaShapeContour(pcl::PointClo
             max_x_contour = std::max(max_x_contour, pt.x());
         }
         
-        ROS_INFO("  Alpha Shape contour: %zu points", contour.size());
-        ROS_INFO("  Contour X range: [%.3f, %.3f] (width: %.3f)", 
-                 min_x_contour, max_x_contour, max_x_contour - min_x_contour);
-        ROS_INFO("===============================");
+        ROS_INFO("  Alpha Shape contour: %zu points; Contour X range: [%.3f, %.3f] (width: %.3f)", 
+                    contour.size(), min_x_contour, max_x_contour, max_x_contour - min_x_contour);
     }
     
     return contour;
@@ -496,48 +450,33 @@ pcl::PointCloud<pcl::PointNormal>::Ptr PathPlanner::extractLayerPoints(
     
     double strict_tolerance = std::min(tolerance, config_.max_height_variation);
 
-    std::vector<pcl::PointNormal> candidate_points;
-        std::vector<double> z_distances;
-        
-        for (const auto& point : cloud->points) {
-            double z_diff = std::abs(point.z - z_center);
-            candidate_points.push_back(point);
-            z_distances.push_back(z_diff);
-        }
-        
-        if (!candidate_points.empty()) {
-            // 找到最小Z距离
-            double min_z_diff = *std::min_element(z_distances.begin(), z_distances.end());
-            
-            // 允许一个很小的容差（考虑浮点精度）
-            double precision_tolerance = std::max(tolerance, 1e-6);
-            
-            for (size_t i = 0; i < candidate_points.size(); ++i) {
-                if (z_distances[i] <= min_z_diff + precision_tolerance) {
-                    layer_cloud->push_back(candidate_points[i]);
-                }
-            }
-        }
+
     
-    // std::vector<pcl::PointNormal> candidate_points;
+     std::vector<pcl::PointNormal> candidate_points;  
     for (const auto& point : cloud->points) {
         double z_diff = std::abs(point.z - z_center);
-        if (z_diff <= strict_tolerance) {
+        if (z_diff <= strict_tolerance) {  //只加入容差范围内的点
             candidate_points.push_back(point);
         }
     }
     
-    if (!candidate_points.empty()) {
-        double avg_z = 0.0;
-        for (const auto& pt : candidate_points) {
-            avg_z += pt.z;
-        }
-        avg_z /= candidate_points.size();
-        
-        for (const auto& pt : candidate_points) {
-            if (std::abs(pt.z - avg_z) <= config_.max_height_variation) {
-                layer_cloud->push_back(pt);
-            }
+    // 如果该高度没有点，直接返回空点云
+    if (candidate_points.empty()) {
+        ROS_DEBUG("No points found for layer at z=%.3f (tolerance=%.3f)", 
+                  z_center, strict_tolerance);
+        return layer_cloud;
+    }
+    
+    // 进一步筛选：基于平均高度
+    double avg_z = 0.0;
+    for (const auto& pt : candidate_points) {
+        avg_z += pt.z;
+    }
+    avg_z /= candidate_points.size();
+    
+    for (const auto& pt : candidate_points) {
+        if (std::abs(pt.z - avg_z) <= config_.max_height_variation) {
+            layer_cloud->push_back(pt);
         }
     }
     
@@ -548,33 +487,105 @@ pcl::PointCloud<pcl::PointNormal>::Ptr PathPlanner::extractLayerPoints(
 }
 //优化航点
 std::vector<PathPlanner::Waypoint> PathPlanner::optimizeWaypointDistribution(
-    const std::vector<Waypoint>& waypoints) {
-    
-    if (waypoints.size() < 3) return waypoints;
-    
-    std::vector<Waypoint> optimized;
-    
-    double target_spacing = 0.0002;  // 2cm
-    
-    optimized.push_back(waypoints[0]);
-    double accumulated_dist = 0.0;
-    
-    for (size_t i = 1; i < waypoints.size(); ++i) {
-        double dist = (waypoints[i].position - waypoints[i-1].position).norm();
-        accumulated_dist += dist;
-        
-        if (accumulated_dist >= target_spacing) {
-            optimized.push_back(waypoints[i]);
-            accumulated_dist = 0.0;
+    const std::vector<Waypoint>& waypoints) 
+{
+    if (waypoints.size() < 2) return waypoints;
+
+    std::vector<Waypoint> smoothed;
+    smoothed.reserve(waypoints.size() * 2);
+
+    //阶段1：法向平滑插值
+    for (size_t i = 0; i < waypoints.size(); ++i) {
+        const Waypoint& current = waypoints[i];
+        const Waypoint& next = waypoints[(i + 1) % waypoints.size()];
+        smoothed.push_back(current);
+
+        if (!config_.enable_normal_smoothing) continue;
+
+        // 计算法向夹角
+        double cos_angle = current.surface_normal.dot(next.surface_normal);
+        cos_angle = std::max(-1.0, std::min(1.0, cos_angle));
+        double angle = acos(cos_angle);
+
+        // 若角度过大，则插入中间点
+        if (angle > config_.normal_angle_threshold) {
+            int num_interpolations =
+                static_cast<int>(ceil(angle / config_.normal_angle_threshold)) - 1;
+            num_interpolations = std::min(num_interpolations, 5);
+
+            for (int j = 1; j <= num_interpolations; ++j) {
+                double t = static_cast<double>(j) / (num_interpolations + 1);
+                Waypoint interp;
+
+                // 位置线性插值
+                interp.position = current.position * (1 - t) + next.position * t;
+
+                // 法向球面线性插值 (Slerp)
+                if (angle > 1e-6) {
+                    double sin_angle = sin(angle);
+                    double w1 = sin((1 - t) * angle) / sin_angle;
+                    double w2 = sin(t * angle) / sin_angle;
+                    interp.surface_normal = 
+                        (current.surface_normal * w1 + next.surface_normal * w2).normalized();
+                } else {
+                    interp.surface_normal = current.surface_normal;
+                }
+
+                interp.approach_dir = -interp.surface_normal;
+                smoothed.push_back(interp);
+            }
         }
     }
-    
-    if ((optimized.back().position - waypoints.back().position).norm() > 0.1) {
-        optimized.push_back(waypoints.back());
+
+    // 阶段2：固定步长重采样 
+    const double target_spacing = config_.resample_spacing; // 步长从配置中读取
+    std::vector<Waypoint> resampled;
+    resampled.push_back(smoothed.front());
+    double accumulated = 0.0;
+
+    for (size_t i = 1; i < smoothed.size(); ++i) {
+        Eigen::Vector3d p1 = smoothed[i - 1].position;
+        Eigen::Vector3d p2 = smoothed[i].position;
+        double segment_len = (p2 - p1).norm();
+        if (segment_len < 1e-6) continue;
+
+        while (accumulated + segment_len >= target_spacing) {
+            double t = (target_spacing - accumulated) / segment_len;
+
+            Waypoint interp;
+            interp.position = p1 + t * (p2 - p1);
+            
+            // 法向量球面插值
+            Eigen::Vector3d n1 = smoothed[i - 1].surface_normal;
+            Eigen::Vector3d n2 = smoothed[i].surface_normal;
+            double dot_n = std::max(-1.0, std::min(1.0, n1.dot(n2)));
+            double angle = acos(dot_n);
+            if (angle > 1e-6) {
+                double sin_angle = sin(angle);
+                double w1 = sin((1 - t) * angle) / sin_angle;
+                double w2 = sin(t * angle) / sin_angle;
+                interp.surface_normal = (n1 * w1 + n2 * w2).normalized();
+            } else {
+                interp.surface_normal = n1;
+            }
+            interp.approach_dir = -interp.surface_normal;
+
+            resampled.push_back(interp);
+            // 准备下一段插值
+            p1 = interp.position;
+            segment_len = (p2 - p1).norm();
+            accumulated = 0.0;
+        }
+        accumulated += segment_len;
     }
-    
-    return optimized;
+
+    // 确保最后一个点加入
+    if ((resampled.back().position - smoothed.back().position).norm() > target_spacing * 0.5) {
+        resampled.push_back(smoothed.back());
+    }
+    return resampled;
 }
+
 //平滑路径
 std::vector<Eigen::Vector3d> PathPlanner::smoothContourAdaptive(
     const std::vector<Eigen::Vector3d>& contour,
@@ -641,15 +652,31 @@ void PathPlanner::computeOrientations(std::vector<Waypoint>& waypoints) {
 }
 
 void PathPlanner::calculateSprayOrientation(Waypoint& waypoint, const Waypoint* prev) {
-    Eigen::Vector3d spray_dir = -waypoint.surface_normal;
-    spray_dir.normalize();
+    //机头方向 = 从外部指向表面 = -surface_normal
+    Eigen::Vector3d heading = -waypoint.surface_normal;
+    heading.normalize();
     
-    waypoint.yaw = std::atan2(spray_dir.y(), spray_dir.x());
+    //计算yaw（XY平面投影）
+    waypoint.yaw = atan2(heading.y(), heading.x());
     
-    double horizontal_dist = std::sqrt(spray_dir.x() * spray_dir.x() + spray_dir.y() * spray_dir.y());
-    waypoint.pitch = std::atan2(-spray_dir.z(), horizontal_dist);
+    //计算pitch（垂直方向）
+    double horizontal_dist = sqrt(heading.x() * heading.x() + heading.y() * heading.y());
+    waypoint.pitch = atan2(-heading.z(), horizontal_dist);
     
-    waypoint.pitch = std::max(-M_PI/6, std::min(M_PI/6, waypoint.pitch));
+    // 限制pitch
+    const double max_pitch = M_PI / 6;
+    waypoint.pitch = std::max(-max_pitch, std::min(max_pitch, waypoint.pitch));
+    
+    waypoint.roll = 0;
+    waypoint.approach_dir = heading;
+    
+    // 计算横向移动的roll
+    if (prev != nullptr && config_.use_roll_for_translation) {
+        waypoint.roll = calculateRollForTranslation(
+            prev->position, waypoint.position, 
+            waypoint.yaw, waypoint.pitch);
+    }
+
 }
 
 double PathPlanner::calculateRollForTranslation(
@@ -755,11 +782,12 @@ pcl::PointCloud<pcl::PointNormal>::Ptr PathPlanner::sampleMeshSurface(const pcl:
         triangle_idx++;
     }
     
-    ROS_INFO("=== Uniform Area-Based Sampling ===");
-    ROS_INFO("Total polygons: %zu", total_polygons);
-    ROS_INFO("Valid triangles: %zu", triangle_idx);
-    ROS_INFO("Skipped triangles: %zu", skipped_triangles);
-    ROS_INFO("Total surface area: %.6f", total_area);
+    //调试信息，用于判断stl采样点云问题
+    // ROS_INFO("=== Uniform Area-Based Sampling ===");
+    // ROS_INFO("Total polygons: %zu", total_polygons);
+    // ROS_INFO("Valid triangles: %zu", triangle_idx);
+    // ROS_INFO("Skipped triangles: %zu", skipped_triangles);
+    // ROS_INFO("Total surface area: %.6f", total_area);
     
     // 第二步：按面积比例分配采样点
     std::vector<size_t> samples_per_triangle(triangle_areas.size());
@@ -800,14 +828,13 @@ pcl::PointCloud<pcl::PointNormal>::Ptr PathPlanner::sampleMeshSurface(const pcl:
     }
     
     ROS_INFO("Sample allocation completed:");
-    ROS_INFO("  Target samples: %zu", num_samples);
-    ROS_INFO("  Assigned samples: %zu", total_assigned_samples);
-    ROS_INFO("  Sample density: %.2f points/unit_area", (double)total_assigned_samples / total_area);
+    ROS_INFO("  Target samples: %zu ,Assigned samples: %zu ,Sample density: %.2f points/unit_area", 
+            num_samples,total_assigned_samples,(double)total_assigned_samples / total_area);
     
     // 统计分配情况
-    size_t min_samples = *std::min_element(samples_per_triangle.begin(), samples_per_triangle.end());
-    size_t max_samples = *std::max_element(samples_per_triangle.begin(), samples_per_triangle.end());
-    ROS_INFO("  Samples per triangle: min=%zu, max=%zu", min_samples, max_samples);
+    // size_t min_samples = *std::min_element(samples_per_triangle.begin(), samples_per_triangle.end());
+    // size_t max_samples = *std::max_element(samples_per_triangle.begin(), samples_per_triangle.end());
+    // ROS_INFO("  Samples per triangle: min=%zu, max=%zu", min_samples, max_samples);
     
     // 第四步：执行采样
     size_t actual_samples = 0;
@@ -905,7 +932,7 @@ void PathPlanner::orientNormalsConsistently(pcl::PointCloud<pcl::PointNormal>::P
 //点云预处理
 pcl::PointCloud<pcl::PointNormal>::Ptr PathPlanner::preprocessPointCloud(pcl::PointCloud<pcl::PointNormal>::Ptr cloud) {
     
-    double voxel_size = 0.001;//体素分辨率1mm
+    double voxel_size = 0.0001;//体素分辨率0.1mm
     pcl::VoxelGrid<pcl::PointNormal> voxel_grid;
     voxel_grid.setInputCloud(cloud);
     voxel_grid.setLeafSize(config_.voxel_resolution, 
@@ -926,7 +953,7 @@ pcl::PointCloud<pcl::PointNormal>::Ptr PathPlanner::preprocessPointCloud(pcl::Po
     return denoised;
 }
 
-//点云转化为航点
+//路径点云转化为航点
 void PathPlanner::transformPointCloud(pcl::PointCloud<pcl::PointNormal>::Ptr cloud, const Eigen::Vector3d& translation, const Eigen::Vector3d& rotation) {
     
     Eigen::Matrix3d rot_matrix = Eigen::Matrix3d::Identity();
@@ -982,148 +1009,81 @@ Eigen::Vector3d PathPlanner::computeAverageNormal(const std::vector<Eigen::Vecto
 }
 
 // offsetContourWithClipper函数，偏移提取出的轮廓形状
-std::vector<Eigen::Vector3d> PathPlanner::offsetContourWithClipper(const std::vector<Eigen::Vector3d>& original_contour, double offset_distance, double z_center) {
-    
-    ROS_INFO("lipper offsetContourWithClipper called");
-    ROS_INFO("Input: %zu points, offset: %.3fm, z: %.3fm", 
-             original_contour.size(), offset_distance, z_center);
-    
+std::vector<Eigen::Vector3d> PathPlanner::offsetContourWithClipper(
+    const std::vector<Eigen::Vector3d>& original_contour,
+    double offset_distance,
+    double z_center)
+{
     if (original_contour.size() < 3) {
         ROS_ERROR("Insufficient points for Clipper offset: %zu", original_contour.size());
         return {};
     }
-    
+
     try {
-        // 1. 转换为Clipper路径格式
-        ROS_INFO("Converting to Clipper paths...");
+        // 1. 转换为 Clipper 路径格式
         Clipper2Lib::PathsD subject_paths = convertToClipperPaths(original_contour);
-        
         if (subject_paths.empty() || subject_paths[0].size() < 3) {
-            ROS_ERROR("Failed to create valid Clipper paths");
+            ROS_ERROR("Invalid Clipper path");
             return {};
         }
-        
+
         const auto& path = subject_paths[0];
-        ROS_INFO("Converted to Clipper format: %zu paths, first path has %zu points", 
-                 subject_paths.size(), path.size());
-        
-        // 2. 检测轮廓方向和尺寸
         double area = Clipper2Lib::Area(path);
-        bool is_clockwise = area < 0;  // Clipper2中，负面积表示顺时针
-        
-        ROS_INFO("Contour analysis:");
-        ROS_INFO("- Area: %.3f", std::abs(area));
-        ROS_INFO("- Direction: %s", is_clockwise ? "Clockwise" : "Counter-clockwise");
-        
-        // 计算轮廓的边界盒来估算尺寸
-        Clipper2Lib::RectD bounds = Clipper2Lib::GetBounds(path);
-        double width = bounds.Width();
-        double height = bounds.Height();
-        double min_dimension = std::min(width, height);
-        
-        ROS_INFO("- Bounds: %.3f x %.3f", width, height);
-        ROS_INFO("- Min dimension: %.3f", min_dimension);
-        ROS_INFO("- Offset distance: %.3f", offset_distance);
-        
-        // 3. 检查偏移距离是否合理
-        if (offset_distance >= min_dimension * 0.4) {
-            ROS_WARN("Offset distance (%.3f) is large relative to contour size (%.3f)", 
-                     offset_distance, min_dimension);
-            ROS_WARN("This may cause the contour to disappear completely");
-            
-            // 自动调整偏移距离
-            double safe_offset = min_dimension * 0.3;  // 使用30%的最小尺寸
-            ROS_WARN("Adjusting offset distance from %.3f to %.3f", offset_distance, safe_offset);
-            offset_distance = safe_offset;
+        bool is_clockwise = area < 0;
+
+        // ROS_INFO("Original contour winding: %s", is_clockwise ? "CW" : "CCW");//调试：用于
+
+        // 2. 确定偏移方向符号
+        double clipper_offset_value = 
+            (is_clockwise ? -offset_distance : offset_distance) * config_.clipper_offset_precision;
+
+        // 3. 直接执行单次偏移
+        ROS_INFO("Performing single-step Clipper offset: %.3fm (%s)",
+                 offset_distance, is_clockwise ? "CW" : "CCW");
+
+        Clipper2Lib::PathsD result_paths = Clipper2Lib::InflatePaths(
+            subject_paths,
+            clipper_offset_value,
+            Clipper2Lib::JoinType::Round,
+            Clipper2Lib::EndType::Polygon,
+            2.0 // 圆角精度
+        );
+
+        if (result_paths.empty() || result_paths[0].size() < 3) {
+            ROS_ERROR("Clipper offset failed: empty output");
+            return {};
         }
-        
-        // 4. 确定正确的偏移符号（向外偏移）
-        double clipper_offset_value;
-        if (is_clockwise) {
-            // 顺时针轮廓：负值向外偏移
-            clipper_offset_value = -offset_distance * config_.clipper_offset_precision;
-        } else {
-            // 逆时针轮廓：正值向外偏移
-            clipper_offset_value = offset_distance * config_.clipper_offset_precision;
-        }
-        
-        ROS_INFO("Executing Clipper InflatePaths...");
-        ROS_INFO("- Raw offset distance: %.3f", offset_distance);
-        ROS_INFO("- Precision factor: %.1f", config_.clipper_offset_precision);
-        ROS_INFO("- Clipper offset value: %.1f (%s)", 
-                 clipper_offset_value, 
-                 clipper_offset_value > 0 ? "outward for CCW" : "outward for CW");
-        
-        // 5. 尝试多种参数组合
-        std::vector<std::pair<double, Clipper2Lib::JoinType>> offset_attempts = {
-            {clipper_offset_value, Clipper2Lib::JoinType::Round},
-            {clipper_offset_value, Clipper2Lib::JoinType::Square},
-            {clipper_offset_value * 0.8, Clipper2Lib::JoinType::Round},  // 80%偏移
-            {clipper_offset_value * 0.6, Clipper2Lib::JoinType::Round},  // 60%偏移
-            {-clipper_offset_value, Clipper2Lib::JoinType::Round},       // 反向尝试
-        };
-        
-        for (size_t attempt = 0; attempt < offset_attempts.size(); ++attempt) {
-            double test_offset = offset_attempts[attempt].first;
-            Clipper2Lib::JoinType join_type = offset_attempts[attempt].second;
-            
-            ROS_INFO("Attempt %zu: offset=%.1f, join=%s", 
-                     attempt + 1, test_offset,
-                     join_type == Clipper2Lib::JoinType::Round ? "Round" : "Square");
-            
-            Clipper2Lib::PathsD solution_paths = Clipper2Lib::InflatePaths(
-                subject_paths,
-                test_offset,
-                join_type,
-                Clipper2Lib::EndType::Polygon,
-                2.0  // 弧段精度
-            );
-            
-            if (!solution_paths.empty()) {
-                ROS_INFO("Success on attempt %zu!", attempt + 1);
-                ROS_INFO("Generated %zu solution path(s)", solution_paths.size());
-                
-                // 选择最大的路径
-                size_t largest_idx = 0;
-                size_t largest_size = 0;
-                
-                for (size_t i = 0; i < solution_paths.size(); ++i) {
-                    ROS_INFO("Solution path %zu: %zu points", i, solution_paths[i].size());
-                    if (solution_paths[i].size() > largest_size) {
-                        largest_size = solution_paths[i].size();
-                        largest_idx = i;
-                    }
-                }
-                
-                if (largest_size >= 3) {
-                    ROS_INFO("Selected path %zu with %zu points", largest_idx, largest_size);
-                    
-                    Clipper2Lib::PathsD result_paths;
-                    result_paths.push_back(solution_paths[largest_idx]);
-                    
-                    std::vector<Eigen::Vector3d> offset_contour = convertFromClipperPaths(result_paths, z_center);
-                    
-                    ROS_INFO("Clipper offset completed successfully!");
-                    ROS_INFO("Final result: %zu -> %zu points", 
-                             original_contour.size(), offset_contour.size());
-                    
-                    return offset_contour;
-                }
-            } else {
-                ROS_WARN("Attempt %zu failed: empty solution", attempt + 1);
+
+        // 4. 选择点数最多的结果路径（防止碎片）
+        size_t largest_idx = 0, largest_size = 0;
+        for (size_t i = 0; i < result_paths.size(); ++i) {
+            if (result_paths[i].size() > largest_size) {
+                largest_idx = i;
+                largest_size = result_paths[i].size();
             }
         }
-        
-        ROS_ERROR("All offset attempts failed!");
-        return {};
-        
+
+        // 5. 转换回 Eigen 格式
+        std::vector<Eigen::Vector3d> offset_contour =
+            convertFromClipperPaths({result_paths[largest_idx]}, z_center);
+
+        ROS_INFO("Clipper offset success: %zu -> %zu points",
+                 original_contour.size(), offset_contour.size());
+
+        double signed_area = 0.0;
+        for (size_t i = 0; i < offset_contour.size(); ++i) {
+            size_t j = (i + 1) % offset_contour.size();
+            signed_area += (offset_contour[j].x() - offset_contour[i].x()) *
+                        (offset_contour[j].y() + offset_contour[i].y());
+        }
+        // ROS_INFO("Offset contour winding: %s", signed_area > 0 ? "CCW" : "CW");//调试：用于
+        return offset_contour;
+
     } catch (const std::exception& e) {
-        ROS_ERROR("Clipper offset failed with exception: %s", e.what());
-        return {};
-    } catch (...) {
-        ROS_ERROR("Clipper offset failed with unknown exception");
+        ROS_ERROR("Clipper offset exception: %s", e.what());
         return {};
     }
+
 }
 
 // convertToClipperPaths函数，确保轮廓质量
@@ -1210,75 +1170,93 @@ std::vector<Eigen::Vector3d> PathPlanner::recomputeNormalsForOffsetContour(
     const std::vector<Eigen::Vector3d>& original_contour,
     pcl::PointCloud<pcl::PointNormal>::Ptr layer_cloud) {
     
+    if (offset_contour.size() < 3) {
+        ROS_ERROR("Offset contour too small: %zu points", offset_contour.size());
+        return {};
+    }
+    
     std::vector<Eigen::Vector3d> normals;
     normals.reserve(offset_contour.size());
     
-    // 构建KD树用于快速最近邻搜索
-    pcl::KdTreeFLANN<pcl::PointNormal> kdtree;
-    kdtree.setInputCloud(layer_cloud);
-    
-    // 为每个偏移后的点计算法向量
+    // 使用有向面积判断：正=逆时针(CCW)，负=顺时针(CW)
+    double signed_area = 0.0;
     for (size_t i = 0; i < offset_contour.size(); ++i) {
-        Eigen::Vector3d normal;
-        
-        // 方法1: 基于轮廓几何计算法向量
-        size_t prev = (i == 0) ? offset_contour.size() - 1 : i - 1;
+        size_t j = (i + 1) % offset_contour.size();
+        signed_area += (offset_contour[j].x() - offset_contour[i].x()) *
+                       (offset_contour[j].y() + offset_contour[i].y());
+    }
+    
+    bool is_clockwise = signed_area < 0;
+    
+    // ROS_INFO("Computing normals for %zu points, winding: %s", 
+    //          offset_contour.size(), is_clockwise ? "CW (clockwise)" : "CCW (counter-clockwise)");
+    
+    //为每个点计算法向量
+    for (size_t i = 0; i < offset_contour.size(); ++i) {
+        // 获取前后点索引
+        size_t prev = (i + offset_contour.size() - 1) % offset_contour.size();
         size_t next = (i + 1) % offset_contour.size();
         
-        Eigen::Vector3d tangent = (offset_contour[next] - offset_contour[prev]).normalized();
-        Eigen::Vector3d geometric_normal(-tangent.y(), tangent.x(), 0);
-        geometric_normal.normalize();
+        // 计算切向量（沿路径前进方向）
+        Eigen::Vector3d tangent = offset_contour[next] - offset_contour[prev];
+        tangent.z() = 0;  // 确保在XY平面
+        tangent.normalize();
         
-        // 方法2: 从原始点云插值法向量
-        pcl::PointNormal query_point;
-        query_point.x = offset_contour[i].x();
-        query_point.y = offset_contour[i].y();
-        query_point.z = offset_contour[i].z();
-        
-        std::vector<int> indices;
-        std::vector<float> distances;
-        
-        if (kdtree.nearestKSearch(query_point, 5, indices, distances) > 0) {
-            Eigen::Vector3d interpolated_normal(0, 0, 0);
-            double total_weight = 0;
-            
-            for (size_t j = 0; j < indices.size(); ++j) {
-                const auto& pt = layer_cloud->points[indices[j]];
-                double weight = 1.0 / (distances[j] + 1e-6);  // 距离越近权重越大
-                
-                interpolated_normal += weight * Eigen::Vector3d(pt.normal_x, pt.normal_y, pt.normal_z);
-                total_weight += weight;
-            }
-            
-            if (total_weight > 0) {
-                interpolated_normal /= total_weight;
-                interpolated_normal.normalize();
-                
-                // 混合几何法向量和插值法向量
-                normal = 0.3 * geometric_normal + 0.7 * interpolated_normal;
-            } else {
-                normal = geometric_normal;
-            }
+        // 根据绕向旋转90度得到法向量
+        Eigen::Vector3d normal;
+        if (is_clockwise) {
+            // 顺时针轮廓：内部在右侧，顺时针旋转90度
+            // (x, y) → (y, -x)
+            normal = Eigen::Vector3d(tangent.y(), -tangent.x(), 0);
         } else {
-            normal = geometric_normal;
-        }
-        
-        // 确保法向量指向外侧
-        Eigen::Vector3d center = computeContourCenter(offset_contour);
-        Eigen::Vector3d to_center = center - offset_contour[i];
-        to_center.z() = 0;  // 只考虑XY平面
-        
-        if (normal.dot(to_center) > 0) {
-            normal = -normal;
+            // 逆时针轮廓：内部在左侧，逆时针旋转90度
+            // (x, y) → (-y, x)
+            normal = Eigen::Vector3d(-tangent.y(), tangent.x(), 0);
         }
         
         normal.normalize();
         normals.push_back(normal);
+        
+        // // 调试输出前几个点
+        // if (i < 5) {
+        //     ROS_INFO("  [%zu] pos=[%.2f, %.2f], tangent=[%.3f, %.3f], normal=[%.3f, %.3f]",
+        //              i, offset_contour[i].x(), offset_contour[i].y(),
+        //              tangent.x(), tangent.y(), normal.x(), normal.y());
+        // }
     }
     
+    //可选的平滑处理
+    if (config_.enable_normal_smoothing) {
+        std::vector<Eigen::Vector3d> smoothed_normals;
+        smoothed_normals.reserve(normals.size());
+        
+        const int smooth_window = 2;  // 平滑窗口：前后各2个点
+        
+        for (size_t i = 0; i < normals.size(); ++i) {
+            Eigen::Vector3d smoothed = Eigen::Vector3d::Zero();
+            double total_weight = 0;
+            
+            // 高斯加权平均
+            for (int offset = -smooth_window; offset <= smooth_window; ++offset) {
+                int idx = (i + offset + normals.size()) % normals.size();
+                double weight = std::exp(-0.5 * offset * offset);  // 高斯权重
+                
+                smoothed += weight * normals[idx];
+                total_weight += weight;
+            }
+            
+            smoothed /= total_weight;
+            smoothed.normalize();
+            smoothed_normals.push_back(smoothed);
+        }
+        
+        ROS_INFO("Normals smoothed with window size %d", smooth_window);
+        return smoothed_normals;
+    }
+    
+    ROS_INFO("Normals computed successfully (no smoothing)");
     return normals;
 }
-
 // 计算轮廓中心点
 Eigen::Vector3d PathPlanner::computeContourCenter(const std::vector<Eigen::Vector3d>& contour) {
     if (contour.empty()) return Eigen::Vector3d::Zero();

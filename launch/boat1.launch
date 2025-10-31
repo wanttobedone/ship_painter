@@ -9,7 +9,7 @@
     <!-- 无人机参数 -->
     <arg name="vehicle" default="iris_0"/>
     <arg name="ID" default="0"/>
-    <arg name="fcu_url" default="udp://:14540@localhost:14557"/> <!--udp协议，仿真/wifi用-->
+    <arg name="fcu_url" default="udp://::24540@localhost:34580"/> <!--udp协议，仿真/wifi用-->
     
     <!-- 无人机初始位置 -->
     <arg name="x" default="0"/>
@@ -42,9 +42,10 @@
     </include>
       
     <!-- 启动 PX4 SITL -->
-    <node name="sitl_$(arg ID)" pkg="px4" type="px4" output="screen" 
-          args="$(find px4)/ROMFS/px4fmu_common -s etc/init.d-posix/rcS -i $(arg ID) -w sitl_iris_$(arg ID)">
-    </node>
+    <include file="$(find px4)/launch/posix_sitl.launch">
+        <arg name="vehicle" value="iris"/> 
+        <arg name="ID" value="$(arg ID)"/>
+    </include>
     
     <!-- 启动 MAVROS -->
     <include file="$(find mavros)/launch/node.launch">
