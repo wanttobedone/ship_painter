@@ -6,6 +6,9 @@ Panels:
       Expanded:
         - /Global Options1
         - /Status1
+        - /BSpline1
+        - /BSpline1/Namespaces1
+        - /BSpline_runned1
       Splitter Ratio: 0.5
     Tree Height: 595
   - Class: rviz/Selection
@@ -67,6 +70,15 @@ Visualization Manager:
       Queue Size: 100
       Value: false
     - Class: rviz/MarkerArray
+      Enabled: true
+      Marker Topic: /visualization/bspline
+      Name: BSpline
+      Namespaces:
+        bspline_control_points: false
+        bspline_curves: true
+      Queue Size: 100
+      Value: true
+    - Class: rviz/MarkerArray
       Enabled: false
       Marker Topic: /visualization/normals
       Name: Normal Vectors
@@ -79,9 +91,7 @@ Visualization Manager:
       Marker Topic: /visualization/path
       Name: Path Visualization
       Namespaces:
-        layer_path: true
-        normals: true
-        waypoints: true
+        {}
       Queue Size: 100
       Value: true
     - Class: rviz/MarkerArray
@@ -105,7 +115,7 @@ Visualization Manager:
       Axes Radius: 0.10000000149011612
       Class: rviz/Pose
       Color: 255; 25; 0
-      Enabled: false
+      Enabled: true
       Head Length: 0.30000001192092896
       Head Radius: 0.10000000149011612
       Name: Drone Pose
@@ -115,7 +125,7 @@ Visualization Manager:
       Shape: Arrow
       Topic: /iris_0/mavros/local_position/pose
       Unreliable: false
-      Value: false
+      Value: true
     - Alpha: 1
       Buffer Length: 1
       Class: rviz/Path
@@ -165,14 +175,27 @@ Visualization Manager:
         ship_model: true
       Queue Size: 100
       Value: true
+    - Class: rviz/Marker
+      Enabled: true
+      Marker Topic: /visualization/current_trajectory
+      Name: BSpline_runned
+      Namespaces:
+        executed_trajectory: true
+      Queue Size: 100
+      Value: true
     - Alpha: 1
+      Axes Length: 1
+      Axes Radius: 0.10000000149011612
       Class: rviz/Pose
       Color: 204; 41; 204
       Enabled: false
-      History Length: 1
+      Head Length: 0.30000001192092896
+      Head Radius: 0.10000000149011612
       Name: PointStamped
       Queue Size: 10
-      Radius: 0.20000000298023224
+      Shaft Length: 1
+      Shaft Radius: 0.05000000074505806
+      Shape: Arrow
       Topic: /iris_0/mavros/local_position/pose
       Unreliable: false
       Value: false
@@ -204,7 +227,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 12.09863567352295
+      Distance: 13.355344772338867
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -212,17 +235,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 2.906557321548462
-        Y: 1.1979304552078247
-        Z: -1.2804239988327026
+        X: 6.286371231079102
+        Y: 0.3013848662376404
+        Z: -1.1861995458602905
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.9450007677078247
+      Pitch: 1.010000467300415
       Target Frame: map
-      Yaw: 5.098194599151611
+      Yaw: 5.458197116851807
     Saved: ~
 Window Geometry:
   Displays:

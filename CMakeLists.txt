@@ -39,6 +39,19 @@ find_package(PCL 1.8 REQUIRED COMPONENTS
   kdtree
 )
 
+# 添加消息依赖
+add_message_files(
+  FILES
+  Bspline.msg
+  BsplineLayer.msg
+)
+
+generate_messages(
+  DEPENDENCIES
+  std_msgs
+  geometry_msgs
+)
+
 # 查找CGAL
 find_package(CGAL REQUIRED COMPONENTS Core)
 if(NOT CGAL_FOUND)
@@ -103,6 +116,15 @@ endforeach()
 
 message(STATUS "Found Clipper2 include dir: ${CLIPPER2_INCLUDE_DIR}")
 message(STATUS "Found Clipper2 sources: ${CLIPPER2_SOURCES}")
+
+# 添加B样条库
+add_library(bspline src/bspline.cpp)
+target_link_libraries(bspline 
+  ${catkin_LIBRARIES} 
+  Eigen3::Eigen)
+target_include_directories(bspline PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
 
 # 创建 Clipper2 目标
 add_library(Clipper2_static STATIC ${CLIPPER2_SOURCES})
@@ -190,9 +212,18 @@ target_link_libraries(path_planner
     CGAL::CGAL
     CGAL::CGAL_Core
     Eigen3::Eigen
+    bspline
   PRIVATE
     Clipper2_static
 )
+
+# 添加trajectory_server节点
+add_executable(trajectory_server_node src/trajectory_server_node.cpp)
+target_link_libraries(trajectory_server_node 
+    bspline
+    ${catkin_LIBRARIES}
+)
+add_dependencies(trajectory_server_node ${PROJECT_NAME}_generate_messages_cpp)
 
 # === 构建主节点 ===
 add_executable(ship_painter_node 

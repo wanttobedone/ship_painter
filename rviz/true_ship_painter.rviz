@@ -6,6 +6,9 @@ Panels:
       Expanded:
         - /Global Options1
         - /Status1
+        - /BSpline1
+        - /BSpline1/Namespaces1
+        - /BSpline_runned1
       Splitter Ratio: 0.5
     Tree Height: 595
   - Class: rviz/Selection
@@ -67,6 +70,14 @@ Visualization Manager:
       Queue Size: 100
       Value: false
     - Class: rviz/MarkerArray
+      Enabled: true
+      Marker Topic: /visualization/bspline
+      Name: BSpline
+      Namespaces:
+        {}
+      Queue Size: 100
+      Value: true
+    - Class: rviz/MarkerArray
       Enabled: false
       Marker Topic: /visualization/normals
       Name: Normal Vectors
@@ -105,7 +116,7 @@ Visualization Manager:
       Axes Radius: 0.10000000149011612
       Class: rviz/Pose
       Color: 255; 25; 0
-      Enabled: false
+      Enabled: true
       Head Length: 0.30000001192092896
       Head Radius: 0.10000000149011612
       Name: Drone Pose
@@ -115,7 +126,7 @@ Visualization Manager:
       Shape: Arrow
       Topic: /mavros/local_position/pose
       Unreliable: false
-      Value: false
+      Value: true
     - Alpha: 1
       Buffer Length: 1
       Class: rviz/Path
@@ -163,6 +174,14 @@ Visualization Manager:
       Name: Model
       Namespaces:
         ship_model: true
+      Queue Size: 100
+      Value: true
+    - Class: rviz/Marker
+      Enabled: true
+      Marker Topic: /visualization/current_trajectory
+      Name: BSpline_runned
+      Namespaces:
+        {}
       Queue Size: 100
       Value: true
     - Alpha: 1

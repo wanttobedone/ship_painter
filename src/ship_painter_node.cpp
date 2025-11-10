@@ -10,6 +10,8 @@
 #include <Eigen/Geometry>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+#include "ship_painter/Bspline.h"
+#include "ship_painter/BsplineLayer.h"
 
 class ShipPainterNode {
 public:
@@ -24,27 +26,37 @@ private:
     // 订阅和发布
     ros::Subscriber state_sub_;
     ros::Subscriber pose_sub_;
-    ros::Publisher local_pos_pub_;
-    ros::Publisher setpoint_raw_pub_;  // 使用PositionTarget进行混合控制
-    ros::Publisher path_vis_pub_;
     ros::Publisher spray_vis_pub_;
     ros::Publisher model_vis_pub_;
+
+    ros::Publisher local_pos_pub_;      // 起飞和设定点需要
+    ros::Publisher setpoint_raw_pub_;   // 保留以备兼容
+    ros::Publisher path_vis_pub_;       // 路径可视化
+
     ros::Publisher status_pub_;
+    ros::Publisher bspline_pub_;  //发布B样条
     
     ros::ServiceClient set_mode_client_;
     ros::ServiceClient arming_client_;
     
     ros::Timer vis_timer_;
-    ros::Timer control_timer_;
+
     
     // 路径规划器
     PathPlanner planner_;
     std::vector<PathPlanner::PathLayer> path_layers_;
 
+    std::vector<PathPlanner::BSplineLayer> bspline_layers_;  //添加缓存
+    bool bsplines_generated_ = false;  //标志位
+
+    ship_painter::BSpline approach_trajectory_;  // 接近轨迹
+    bool has_approach_trajectory_ = false;       // 是否生成了接近轨迹
+
     ros::Publisher pointcloud_vis_pub_;  // 点云可视化发布者   
     ros::Publisher normal_vis_pub_;  // 法向量可视化发布者
     ros::Publisher alphashape_vis_pub_;//as轮廓发布
     ros::Publisher offset_contour_vis_pub_;  // 偏移轮廓可视化发布者
+    ros::Publisher bspline_vis_pub_;//B样条可视化
     
     // 状态管理
     struct FlightState {
@@ -53,30 +65,14 @@ private:
         geometry_msgs::PoseStamped home_pose;
         bool pose_received = false;
         bool home_set = false;
-        
-        size_t current_layer_idx = 0;
-        size_t current_waypoint_idx = 0;
-        bool mission_complete = false;
+
         bool path_ready = false;
+        
         //路径变换信息
         Eigen::Vector3d path_translation = Eigen::Vector3d::Zero();
         double path_z_offset = 0.0;
         bool path_transformed = false;
         
-        // 控制参数
-        double position_tolerance = 0.15;  // 位置容差 (m)
-        double orientation_tolerance = 0.1; // 姿态容差 (rad)
-        double waypoint_hold_time = 0.5;  // 航点保持时间 (s)
-        ros::Time waypoint_reached_time;
-        bool waypoint_reached = false;
-        
-        // 平滑过渡
-        Eigen::Vector3d last_position;
-        Eigen::Quaterniond last_orientation;
-        bool has_last_state = false;
-        
-        // 统计
-        size_t total_waypoints_reached = 0;
     } flight_state_;
     
     // 参数配置
@@ -102,10 +98,11 @@ private:
         
         // 飞行参数
         double takeoff_height = 2.0;
-        double flight_speed = 0.5;        // 巡航速度
+        double flight_speed = 5;        // 巡航速度
         double approach_speed = 0.3;      // 接近速度
         double max_roll = 0.26;           // 最大翻滚角 (15度)
         double max_pitch_adjustment = 0.52; // 最大俯仰调整 (30度)
+        double transition_speed = 0.3; //B样条速度
         
         // 控制模式
         bool use_position_control = false; // 是否使用纯位置控制
@@ -124,7 +121,7 @@ private:
     void stateCallback(const mavros_msgs::State::ConstPtr& msg);
     void poseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg);
     void visualizationTimerCallback(const ros::TimerEvent& event);
-    void controlTimerCallback(const ros::TimerEvent& event);
+
     
     // 飞行控制
     bool waitForConnection();
@@ -134,28 +131,11 @@ private:
     bool takeoff(double height);
     bool land();
     
-    // 路径跟踪
-    bool executeSprayMission();
-    void publishControlCommand();
-    geometry_msgs::PoseStamped computeTargetPose();
-    mavros_msgs::PositionTarget computePositionTarget();
-    
-    // 姿态计算
-    Eigen::Quaterniond computeSprayOrientation(const PathPlanner::Waypoint& waypoint,
-                                               const Eigen::Vector3d& current_pos);
-    double computeRollForLateralMovement(const Eigen::Vector3d& from,
-                                         const Eigen::Vector3d& to,
-                                         double current_yaw);
-    
-    // 航点管理
-    bool isWaypointReached();
-    void advanceToNextWaypoint();
-    PathPlanner::Waypoint getCurrentWaypoint();
-    PathPlanner::Waypoint getInterpolatedWaypoint(double alpha);
+    void publishBSplineTrajectories();//B样条轨迹
+    void generateApproachTrajectory();// 飞向第一层第一个B样条点
+
     
     // 可视化
-    void publishPathVisualization();
-    void publishSprayVisualization();
     void publishModelVisualization();
     void publishStatusVisualization(); 
     void publishNormalVisualization();  // 法向量可视化
@@ -163,6 +143,7 @@ private:
     void publishAlphaShapeVisualization();//as后的路径
     void publishOffsetContourVisualization();//偏移后的路径
     Eigen::Vector3d computeContourCenter(const std::vector<Eigen::Vector3d>& contour);
+    void publishBSplineVisualization();//B样条
     
     // 辅助函数
     bool loadParameters();
@@ -205,6 +186,9 @@ ShipPainterNode::ShipPainterNode() : nh_private_("~") {
         "/visualization/model", 10);
     status_pub_ = nh_.advertise<visualization_msgs::Marker>(
         "/visualization/status", 10);
+    // 初始化B样条发布者
+    bspline_pub_ = nh_.advertise<ship_painter::BsplineLayer>(
+        "/planning/bspline_layers", 10);
     //点云可视化发布
     pointcloud_vis_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(
     "/visualization/pointcloud", 10);
@@ -217,6 +201,14 @@ ShipPainterNode::ShipPainterNode() : nh_private_("~") {
     offset_contour_vis_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(
     "/visualization/offset_contour", 10);
     ROS_INFO("Debug visualization publishers initialized");//偏移后轮廓发布
+
+    bspline_vis_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(
+    "/visualization/bspline", 10);//B样条可视化
+
+    //初始化可视化定时器
+    vis_timer_ = nh_.createTimer(
+        ros::Duration(0.1),  // 10Hz
+        &ShipPainterNode::visualizationTimerCallback, this);
     
     // 设置服务客户端
     set_mode_client_ = nh_.serviceClient<mavros_msgs::SetMode>(
@@ -225,11 +217,6 @@ ShipPainterNode::ShipPainterNode() : nh_private_("~") {
         params_.mavros_ns + "/cmd/arming");
     
     // 设置定时器
-    vis_timer_ = nh_.createTimer(ros::Duration(0.1), 
-                                 &ShipPainterNode::visualizationTimerCallback, this);
-    control_timer_ = nh_.createTimer(ros::Duration(0.05),  // 20Hz控制频率
-                                     &ShipPainterNode::controlTimerCallback, this);
-    control_timer_.stop();  // 初始停止
     
     ROS_INFO("Ship Painter Node initialized");
 }
@@ -247,10 +234,10 @@ bool ShipPainterNode::loadParameters() {
     nh_private_.param<double>("layer_height", params_.layer_height, SPRAY_WIDTH);
     
     nh_private_.param<double>("takeoff_height", params_.takeoff_height, 2.0);
-    nh_private_.param<double>("flight_speed", params_.flight_speed, 0.5);
+    nh_private_.param<double>("flight_speed", params_.flight_speed, 5);
     nh_private_.param<double>("approach_speed", params_.approach_speed, 0.3);
-    nh_private_.param<double>("position_tolerance", flight_state_.position_tolerance, 0.15);
-    nh_private_.param<double>("orientation_tolerance", flight_state_.orientation_tolerance, 0.1);
+    nh_private_.param<double>("transition_speed", params_.transition_speed, 0.3);//B样条速度
+
     
     nh_private_.param<bool>("use_position_control", params_.use_position_control, false);
     nh_private_.param<bool>("enable_spray_visualization", params_.enable_spray_visualization, true);
@@ -289,6 +276,9 @@ bool ShipPainterNode::loadParameters() {
     planner_config.target_sample_count = static_cast<size_t>(sample_count); // 转换为size_t
 
     planner_config.resample_spacing = resample_spacing_param;
+
+    planner_config.flight_speed = params_.flight_speed;//飞行速度
+    planner_config.transition_speed = params_.transition_speed;//层间过渡速度
     
     planner_ = PathPlanner(planner_config);
     
@@ -300,6 +290,8 @@ bool ShipPainterNode::loadParameters() {
     ROS_INFO("Spray distance: %.3f m", params_.spray_distance);
     ROS_INFO("Layer height: %.3f m", params_.layer_height);
     ROS_INFO("Max height diff per layer: %.3f m", MAX_HEIGHT_DIFF);
+
+    ROS_INFO("Flight speed parameter: %.2f m/s", params_.flight_speed);
     
     return true;
 }
@@ -356,8 +348,6 @@ void ShipPainterNode::printMissionSummary() {
     
     ROS_INFO("Total waypoints: %zu", total_waypoints);
     
-    double estimated_time = total_waypoints * (flight_state_.waypoint_hold_time + 1.0);
-    ROS_INFO("Estimated mission time: %.1f seconds", estimated_time);
 }
 
 void ShipPainterNode::stateCallback(const mavros_msgs::State::ConstPtr& msg) {
@@ -380,311 +370,6 @@ void ShipPainterNode::poseCallback(const geometry_msgs::PoseStamped::ConstPtr& m
                  flight_state_.home_pose.pose.position.y,
                  flight_state_.home_pose.pose.position.z);
     }
-}
-
-void ShipPainterNode::controlTimerCallback(const ros::TimerEvent& event) {
-    if (!flight_state_.path_ready || flight_state_.mission_complete) {
-        return;
-    }
-    
-    publishControlCommand();
-    
-    // 检查是否到达当前航点
-    if (isWaypointReached()) {
-        if (!flight_state_.waypoint_reached) {
-            flight_state_.waypoint_reached = true;
-            flight_state_.waypoint_reached_time = ros::Time::now();
-            ROS_INFO("Reached waypoint %zu in layer %zu",
-                     flight_state_.current_waypoint_idx + 1,
-                     flight_state_.current_layer_idx + 1);
-        }
-        
-        // 在航点保持一段时间后前进
-        if ((ros::Time::now() - flight_state_.waypoint_reached_time).toSec() > 
-            flight_state_.waypoint_hold_time) {
-            advanceToNextWaypoint();
-        }
-    }
-}
-
-void ShipPainterNode::publishControlCommand() {
-    if (params_.use_position_control) {
-        // 纯位置控制模式
-        geometry_msgs::PoseStamped pose_target = computeTargetPose();
-        local_pos_pub_.publish(pose_target);
-    } else {
-        // 混合控制模式（位置+姿态+roll）
-        mavros_msgs::PositionTarget pos_target = computePositionTarget();
-        setpoint_raw_pub_.publish(pos_target);
-    }
-}
-
-geometry_msgs::PoseStamped ShipPainterNode::computeTargetPose() {
-    geometry_msgs::PoseStamped target;
-    target.header.frame_id = params_.frame_id;
-    target.header.stamp = ros::Time::now();
-    
-    if (flight_state_.current_layer_idx >= path_layers_.size()) {
-        target.pose = flight_state_.home_pose.pose;
-        return target;
-    }
-    
-    PathPlanner::Waypoint wp = getCurrentWaypoint();
-    
-    // 位置
-    target.pose.position.x = wp.position.x();
-    target.pose.position.y = wp.position.y();
-    target.pose.position.z = wp.position.z();
-    
-    // 计算喷涂姿态
-    Eigen::Vector3d current_pos(
-        flight_state_.current_pose.pose.position.x,
-        flight_state_.current_pose.pose.position.y,
-        flight_state_.current_pose.pose.position.z
-    );
-    
-    Eigen::Quaterniond q = computeSprayOrientation(wp, current_pos);
-    
-    // 平滑过渡
-    if (flight_state_.has_last_state) {
-        q = smoothOrientation(q, flight_state_.last_orientation, 0.1);
-        flight_state_.last_orientation = q;
-    } else {
-        flight_state_.last_orientation = q;
-        flight_state_.has_last_state = true;
-    }
-    
-    target.pose.orientation.w = q.w();
-    target.pose.orientation.x = q.x();
-    target.pose.orientation.y = q.y();
-    target.pose.orientation.z = q.z();
-    
-    return target;
-}
-
-mavros_msgs::PositionTarget ShipPainterNode::computePositionTarget() {
-    mavros_msgs::PositionTarget target;
-    target.header.stamp = ros::Time::now();
-    target.header.frame_id = params_.frame_id;
-    target.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED;
-    
-    PathPlanner::Waypoint wp = getCurrentWaypoint();
-    
-    // 设置位置
-    target.position.x = wp.position.x();
-    target.position.y = wp.position.y();
-    target.position.z = wp.position.z();
-    
-    // 计算速度（用于平滑移动）
-    Eigen::Vector3d target_pos(wp.position.x(), wp.position.y(), wp.position.z());
-    Eigen::Vector3d current_pos(
-        flight_state_.current_pose.pose.position.x,
-        flight_state_.current_pose.pose.position.y,
-        flight_state_.current_pose.pose.position.z
-    );
-    
-    Eigen::Vector3d direction = target_pos - current_pos;
-    double distance = direction.norm();
-    
-    if (distance > 0.1) {
-        direction.normalize();
-        double speed = (distance > 1.0) ? params_.flight_speed : params_.approach_speed;
-        target.velocity.x = direction.x() * speed;
-        target.velocity.y = direction.y() * speed;
-        target.velocity.z = direction.z() * speed;
-    } else {
-        target.velocity.x = 0;
-        target.velocity.y = 0;
-        target.velocity.z = 0;
-    }
-    
-    // 计算姿态
-    // 1. 基础喷涂姿态（偏航角和俯仰角）
-    Eigen::Vector3d spray_direction = -wp.surface_normal;
-    spray_direction.normalize();
-    
-    double yaw = std::atan2(spray_direction.y(), spray_direction.x());
-    double pitch = std::asin(-spray_direction.z());
-    
-    // 2. 如果需要俯仰调整（非垂直表面）
-    if (wp.needs_pitch_adjustment) {
-        pitch = std::max(-params_.max_pitch_adjustment, 
-                        std::min(params_.max_pitch_adjustment, pitch));
-    }
-    
-    // 3. 计算横向移动所需的roll角
-    double roll = 0.0;
-    if (flight_state_.current_waypoint_idx > 0 && distance > 0.1) {
-        roll = computeRollForLateralMovement(current_pos, target_pos, yaw);
-    }
-    
-    // 设置姿态（用欧拉角）
-    target.yaw = yaw;
-    target.yaw_rate = 0;
-    
-    // 创建四元数（用于更精确的控制）
-    tf2::Quaternion q;
-    q.setRPY(roll, pitch, yaw);
-    
-    // 设置type_mask（控制哪些通道）
-    target.type_mask = 
-        mavros_msgs::PositionTarget::IGNORE_AFX |
-        mavros_msgs::PositionTarget::IGNORE_AFY |
-        mavros_msgs::PositionTarget::IGNORE_AFZ;
-    
-    return target;
-}
-
-Eigen::Quaterniond ShipPainterNode::computeSprayOrientation(
-    const PathPlanner::Waypoint& waypoint,
-    const Eigen::Vector3d& current_pos) {
-    
-    // 喷头需要指向表面（-surface_normal方向）
-    Eigen::Vector3d spray_direction = -waypoint.surface_normal;
-    spray_direction.normalize();
-    
-    // 计算偏航角（水平旋转）
-    double yaw = std::atan2(spray_direction.y(), spray_direction.x());
-    
-    // 计算俯仰角
-    double pitch = std::asin(-spray_direction.z());
-    
-    // 如果需要俯仰调整，限制俯仰角
-    if (waypoint.needs_pitch_adjustment) {
-        pitch = std::max(-params_.max_pitch_adjustment, 
-                        std::min(params_.max_pitch_adjustment, pitch));
-    }
-    
-    // 计算roll角（用于横向移动）
-    double roll = 0.0;
-    if (flight_state_.current_waypoint_idx > 0) {
-        Eigen::Vector3d movement = waypoint.position - current_pos;
-        movement.z() = 0;  // 只考虑水平移动
-        
-        if (movement.norm() > 0.1) {
-            // 将移动向量转换到无人机坐标系
-            Eigen::Matrix3d R_yaw = Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()).matrix();
-            Eigen::Vector3d movement_body = R_yaw.transpose() * movement;
-            
-            // 根据Y方向移动计算roll
-            roll = std::atan2(movement_body.y(), movement.norm()) * params_.roll_gain;
-            roll = std::max(-params_.max_roll, std::min(params_.max_roll, roll));
-        }
-    }
-    
-    // 创建四元数
-    Eigen::AngleAxisd roll_angle(roll, Eigen::Vector3d::UnitX());
-    Eigen::AngleAxisd pitch_angle(pitch, Eigen::Vector3d::UnitY());
-    Eigen::AngleAxisd yaw_angle(yaw, Eigen::Vector3d::UnitZ());
-    
-    return Eigen::Quaterniond(yaw_angle * pitch_angle * roll_angle);
-}
-
-double ShipPainterNode::computeRollForLateralMovement(
-    const Eigen::Vector3d& from,
-    const Eigen::Vector3d& to,
-    double current_yaw) {
-    
-    // 计算移动向量
-    Eigen::Vector3d movement = to - from;
-    movement.z() = 0;  // 只考虑水平移动
-    
-    if (movement.norm() < 0.01) return 0.0;
-    
-    // 将移动向量转换到无人机坐标系
-    Eigen::Matrix3d R_yaw = Eigen::AngleAxisd(current_yaw, Eigen::Vector3d::UnitZ()).matrix();
-    Eigen::Vector3d movement_body = R_yaw.transpose() * movement;
-    
-    // 计算所需的roll角
-    // 正roll产生右移，负roll产生左移
-    double desired_lateral_speed = movement_body.y() / movement.norm() * params_.flight_speed;
-    double roll = std::atan(desired_lateral_speed / 9.81) * params_.roll_gain;
-    
-    // 限制roll角
-    roll = std::max(-params_.max_roll, std::min(params_.max_roll, roll));
-    
-    return roll;
-}
-
-bool ShipPainterNode::isWaypointReached() {
-    PathPlanner::Waypoint wp = getCurrentWaypoint();
-    
-    // 计算位置误差
-    geometry_msgs::Point target_pos;
-    target_pos.x = wp.position.x();
-    target_pos.y = wp.position.y();
-    target_pos.z = wp.position.z();
-    
-    double pos_error = calculateDistance(flight_state_.current_pose.pose.position, target_pos);
-    
-    // 对于喷涂任务，主要关注位置精度
-    return pos_error < flight_state_.position_tolerance;
-}
-
-void ShipPainterNode::advanceToNextWaypoint() {
-    const auto& current_layer = path_layers_[flight_state_.current_layer_idx];
-    
-    flight_state_.current_waypoint_idx++;
-    flight_state_.waypoint_reached = false;
-    flight_state_.total_waypoints_reached++;
-    
-    if (flight_state_.current_waypoint_idx >= current_layer.waypoints.size()) {
-        ROS_INFO("Completed layer %zu/%zu",
-                 flight_state_.current_layer_idx + 1, path_layers_.size());
-        
-        flight_state_.current_layer_idx++;
-        flight_state_.current_waypoint_idx = 0;
-        
-        if (flight_state_.current_layer_idx >= path_layers_.size()) {
-            flight_state_.mission_complete = true;
-            ROS_INFO("Mission complete! Total waypoints: %zu",
-                     flight_state_.total_waypoints_reached);
-        }
-    }
-}
-
-PathPlanner::Waypoint ShipPainterNode::getCurrentWaypoint() {
-    if (flight_state_.current_layer_idx < path_layers_.size()) {
-        const auto& layer = path_layers_[flight_state_.current_layer_idx];
-        if (flight_state_.current_waypoint_idx < layer.waypoints.size()) {
-            return layer.waypoints[flight_state_.current_waypoint_idx];
-        }
-    }
-    
-    // 返回home位置作为默认
-    PathPlanner::Waypoint home_wp;
-    home_wp.position = Eigen::Vector3d(
-        flight_state_.home_pose.pose.position.x,
-        flight_state_.home_pose.pose.position.y,
-        flight_state_.home_pose.pose.position.z);
-    home_wp.surface_normal = Eigen::Vector3d(0, 0, -1);  // 向上
-    home_wp.approach_dir = Eigen::Vector3d(0, 0, 1);     // 向下接近
-    return home_wp;
-}
-
-PathPlanner::Waypoint ShipPainterNode::getInterpolatedWaypoint(double alpha) {
-    // 获取当前和下一个航点，进行插值
-    PathPlanner::Waypoint current = getCurrentWaypoint();
-    
-    if (flight_state_.current_waypoint_idx + 1 < 
-        path_layers_[flight_state_.current_layer_idx].waypoints.size()) {
-        
-        PathPlanner::Waypoint next = 
-            path_layers_[flight_state_.current_layer_idx]
-            .waypoints[flight_state_.current_waypoint_idx + 1];
-        
-        PathPlanner::Waypoint interpolated;
-        interpolated.position = (1.0 - alpha) * current.position + alpha * next.position;
-        interpolated.surface_normal = ((1.0 - alpha) * current.surface_normal + 
-                                       alpha * next.surface_normal).normalized();
-        interpolated.approach_dir = -interpolated.surface_normal;
-        interpolated.needs_pitch_adjustment = current.needs_pitch_adjustment || 
-                                              next.needs_pitch_adjustment;
-        
-        return interpolated;
-    }
-    
-    return current;
 }
 
 double ShipPainterNode::calculateDistance(const geometry_msgs::Point& p1,
@@ -714,222 +399,15 @@ Eigen::Quaterniond ShipPainterNode::smoothOrientation(const Eigen::Quaterniond& 
     return current.slerp(smoothing_factor, target);
 }
 
-bool ShipPainterNode::executeSprayMission() {
-    if (!flight_state_.path_ready || path_layers_.empty()) {
-        ROS_ERROR("No path to follow");
-        return false;
-    }
-    
-    ROS_INFO("Starting spray painting mission...");
-    ROS_INFO("Control mode: %s", params_.use_position_control ? "Position" : "Position+Attitude");
-    
-    control_timer_.start();
-    
-    ros::Rate rate(20);
-    while (ros::ok() && !flight_state_.mission_complete) {
-        if (!flight_state_.mavros_state.connected || !flight_state_.mavros_state.armed) {
-            ROS_ERROR("Lost connection or disarmed");
-            control_timer_.stop();
-            return false;
-        }
-        
-        ros::spinOnce();
-        rate.sleep();
-    }
-    
-    control_timer_.stop();
-    return flight_state_.mission_complete;
-}
-
 // 可视化函数
 void ShipPainterNode::visualizationTimerCallback(const ros::TimerEvent& event) {
-    publishPathVisualization();
-    publishSprayVisualization();
     publishModelVisualization();
     publishStatusVisualization();
     publishPointCloudVisualization();//点云可视化
     publishNormalVisualization();//法向量可视化
     publishAlphaShapeVisualization(); //as轮廓可视化
     publishOffsetContourVisualization();//偏移轮廓可视化
-}
-//按层划分路径线
-void ShipPainterNode::publishPathVisualization() {
-    if (!flight_state_.path_ready) return;
-    
-    visualization_msgs::MarkerArray marker_array;
-    
-    for (size_t layer_idx = 0; layer_idx < path_layers_.size(); ++layer_idx) {
-        const auto& layer = path_layers_[layer_idx];
-        
-        // 路径线
-        visualization_msgs::Marker path_marker;
-        path_marker.header.frame_id = "map";
-        path_marker.header.stamp = ros::Time::now();
-        path_marker.ns = "layer_path";
-        path_marker.id = layer_idx;
-        path_marker.type = visualization_msgs::Marker::LINE_STRIP;
-        path_marker.action = visualization_msgs::Marker::ADD;
-        path_marker.scale.x = 0.02;
-        
-        // 颜色编码
-        if (layer_idx < flight_state_.current_layer_idx) {
-            // 已完成层 - 灰色
-            path_marker.color.r = 0.3;
-            path_marker.color.g = 0.3;
-            path_marker.color.b = 0.3;
-            path_marker.color.a = 0.5;
-        } else if (layer_idx == flight_state_.current_layer_idx) {
-            // 当前层 - 绿色
-            path_marker.color.r = 0.0;
-            path_marker.color.g = 1.0;
-            path_marker.color.b = 0.0;
-            path_marker.color.a = 1.0;
-        } else {
-            // 未完成层 - 橙色
-            path_marker.color.r = 1.0;
-            path_marker.color.g = 0.5;
-            path_marker.color.b = 0.0;
-            path_marker.color.a = 0.7;
-        }
-        
-        for (const auto& wp : layer.waypoints) {
-            geometry_msgs::Point p;
-            p.x = wp.position.x();
-            p.y = wp.position.y();
-            p.z = wp.position.z();
-            path_marker.points.push_back(p);
-        }
-        
-        marker_array.markers.push_back(path_marker);
-        
-        // 航点球
-        visualization_msgs::Marker wp_marker;
-        wp_marker.header = path_marker.header;
-        wp_marker.ns = "waypoints";
-        wp_marker.id = layer_idx + 1000;
-        wp_marker.type = visualization_msgs::Marker::SPHERE_LIST;
-        wp_marker.action = visualization_msgs::Marker::ADD;
-        wp_marker.scale.x = 0.05;
-        wp_marker.scale.y = 0.05;
-        wp_marker.scale.z = 0.05;
-        wp_marker.color = path_marker.color;
-        wp_marker.points = path_marker.points;
-        
-        marker_array.markers.push_back(wp_marker);
-        
-        // 法向量箭头（显示喷涂方向）
-        if (layer_idx == flight_state_.current_layer_idx) {
-            visualization_msgs::Marker normal_marker;
-            normal_marker.header = path_marker.header;
-            normal_marker.ns = "normals";
-            normal_marker.id = layer_idx + 2000;
-            normal_marker.type = visualization_msgs::Marker::ARROW;
-            normal_marker.action = visualization_msgs::Marker::ADD;
-            normal_marker.scale.x = 0.01;  // 箭杆直径
-            normal_marker.scale.y = 0.02;  // 箭头直径
-            normal_marker.scale.z = 0.02;  // 箭头长度
-            normal_marker.color.r = 0.0;
-            normal_marker.color.g = 0.0;
-            normal_marker.color.b = 1.0;
-            normal_marker.color.a = 0.8;
-            
-            if (flight_state_.current_waypoint_idx < layer.waypoints.size()) {
-                const auto& wp = layer.waypoints[flight_state_.current_waypoint_idx];
-                
-                geometry_msgs::Point start, end;
-                start.x = wp.position.x();
-                start.y = wp.position.y();
-                start.z = wp.position.z();
-                
-                Eigen::Vector3d end_pos = wp.position - wp.surface_normal * 0.3;
-                end.x = end_pos.x();
-                end.y = end_pos.y();
-                end.z = end_pos.z();
-                
-                normal_marker.points.push_back(start);
-                normal_marker.points.push_back(end);
-                
-                marker_array.markers.push_back(normal_marker);
-            }
-        }
-    }
-    
-    path_vis_pub_.publish(marker_array);
-}
-
-void ShipPainterNode::publishSprayVisualization() {
-    if (!params_.enable_spray_visualization || !flight_state_.path_ready) return;
-    
-    visualization_msgs::MarkerArray marker_array;
-    
-    // 当前喷涂区域
-    if (flight_state_.current_layer_idx < path_layers_.size()) {
-        const auto& layer = path_layers_[flight_state_.current_layer_idx];
-        if (flight_state_.current_waypoint_idx < layer.waypoints.size()) {
-            const auto& wp = layer.waypoints[flight_state_.current_waypoint_idx];
-            
-            // 喷涂圆锥
-            visualization_msgs::Marker spray_marker;
-            spray_marker.header.frame_id = "map";
-            spray_marker.header.stamp = ros::Time::now();
-            spray_marker.ns = "spray_cone";
-            spray_marker.id = 0;
-            spray_marker.type = visualization_msgs::Marker::CYLINDER;
-            spray_marker.action = visualization_msgs::Marker::ADD;
-            
-            // 位置在航点和表面之间
-            Eigen::Vector3d spray_center = wp.position - wp.surface_normal * params_.spray_distance * 0.5;
-            spray_marker.pose.position.x = spray_center.x();
-            spray_marker.pose.position.y = spray_center.y();
-            spray_marker.pose.position.z = spray_center.z();
-            
-            // 朝向表面
-            Eigen::Vector3d spray_dir = -wp.surface_normal;
-            Eigen::Quaterniond q = computeSprayOrientation(wp, wp.position);
-            spray_marker.pose.orientation.w = q.w();
-            spray_marker.pose.orientation.x = q.x();
-            spray_marker.pose.orientation.y = q.y();
-            spray_marker.pose.orientation.z = q.z();
-            
-            spray_marker.scale.x = params_.spray_radius * 2;
-            spray_marker.scale.y = params_.spray_radius * 2;
-            spray_marker.scale.z = params_.spray_distance;
-            
-            spray_marker.color.r = 0.0;
-            spray_marker.color.g = 0.5;
-            spray_marker.color.b = 1.0;
-            spray_marker.color.a = 0.3;
-            
-            marker_array.markers.push_back(spray_marker);
-            
-            // 喷涂圆面（在表面上）
-            visualization_msgs::Marker spray_circle;
-            spray_circle.header = spray_marker.header;
-            spray_circle.ns = "spray_circle";
-            spray_circle.id = 1;
-            spray_circle.type = visualization_msgs::Marker::CYLINDER;
-            spray_circle.action = visualization_msgs::Marker::ADD;
-            
-            Eigen::Vector3d surface_pos = wp.position - wp.surface_normal * params_.spray_distance;
-            spray_circle.pose.position.x = surface_pos.x();
-            spray_circle.pose.position.y = surface_pos.y();
-            spray_circle.pose.position.z = surface_pos.z();
-            spray_circle.pose.orientation = spray_marker.pose.orientation;
-            
-            spray_circle.scale.x = params_.spray_radius * 2;
-            spray_circle.scale.y = params_.spray_radius * 2;
-            spray_circle.scale.z = 0.01;  // 很薄的圆盘
-            
-            spray_circle.color.r = 0.0;
-            spray_circle.color.g = 1.0;
-            spray_circle.color.b = 0.0;
-            spray_circle.color.a = 0.5;
-            
-            marker_array.markers.push_back(spray_circle);
-        }
-    }
-    
-    spray_vis_pub_.publish(marker_array);
+    publishBSplineVisualization();  //B样条曲线（青色线）
 }
 
 void ShipPainterNode::publishAlphaShapeVisualization() {
@@ -1196,33 +674,20 @@ void ShipPainterNode::publishStatusVisualization() {
     
     status_marker.pose.position.x = params_.model_x;
     status_marker.pose.position.y = params_.model_y;
-    status_marker.pose.position.z = params_.model_z;
+    status_marker.pose.position.z = params_.model_z + 2.0;
     status_marker.pose.orientation.w = 1.0;
     
     status_marker.scale.z = 0.3;
-    
     status_marker.color.r = 1.0;
     status_marker.color.g = 1.0;
     status_marker.color.b = 1.0;
     status_marker.color.a = 1.0;
     
     std::stringstream ss;
-    if (flight_state_.mission_complete) {
-        ss << "MISSION COMPLETE\n";
-        ss << "Total waypoints: " << flight_state_.total_waypoints_reached;
-    } else if (flight_state_.path_ready) {
-        ss << "Layer: " << (flight_state_.current_layer_idx + 1) 
-           << "/" << path_layers_.size() << "\n";
-        
-        if (flight_state_.current_layer_idx < path_layers_.size()) {
-            const auto& layer = path_layers_[flight_state_.current_layer_idx];
-            ss << "Waypoint: " << (flight_state_.current_waypoint_idx + 1) 
-               << "/" << layer.waypoints.size() << "\n";
-            ss << "Height: " << std::fixed << std::setprecision(3) 
-               << layer.z_center << " m\n";
-        }
-        
-        ss << "Progress: " << flight_state_.total_waypoints_reached << " waypoints";
+    if (flight_state_.path_ready) {
+        ss << "B-Spline Trajectory Active\n";
+        ss << "Total layers: " << path_layers_.size() << "\n";
+        ss << "Mode: Continuous tracking";
     } else {
         ss << "Initializing...";
     }
@@ -1481,6 +946,80 @@ void ShipPainterNode::publishNormalVisualization() {
     debug_counter++;
 }
 
+//B样条轨迹
+void ShipPainterNode::publishBSplineTrajectories() {
+    // 生成B样条轨迹
+    if (!bsplines_generated_) {
+        bspline_layers_ = planner_.generateBSplineLayersFromPath(path_layers_);
+        bsplines_generated_ = true;
+        ROS_INFO("B-spline layers generated from transformed path (drone-relative)");
+    }
+}
+
+// 发布B样条可视化
+void ShipPainterNode::publishBSplineVisualization() {
+    if (!bsplines_generated_) return;
+    
+    visualization_msgs::MarkerArray markers;
+    
+    for (size_t i = 0; i < bspline_layers_.size(); i++) {
+        const auto& layer = bspline_layers_[i];
+        
+        // B样条曲线
+        visualization_msgs::Marker spline_marker;
+        spline_marker.header.frame_id = "map";
+        spline_marker.header.stamp = ros::Time::now();
+        spline_marker.ns = "bspline_curves";
+        spline_marker.id = i;
+        spline_marker.type = visualization_msgs::Marker::LINE_STRIP;
+        spline_marker.action = visualization_msgs::Marker::ADD;
+        spline_marker.scale.x = 0.03;  // 比航点线粗一点
+        spline_marker.color.r = 0.0;
+        spline_marker.color.g = 1.0;
+        spline_marker.color.b = 1.0;  // 青色
+        spline_marker.color.a = 0.8;
+        
+        // 采样B样条曲线
+        double total_time = layer.trajectory.getTotalTime();
+        for (double t = 0; t <= total_time; t += 0.05) {  // 每0.05秒一个点
+            Eigen::Vector3d pos = layer.trajectory.getPosition(t);
+            geometry_msgs::Point p;
+            p.x = pos.x();
+            p.y = pos.y();
+            p.z = pos.z();
+            spline_marker.points.push_back(p);
+        }
+        
+        markers.markers.push_back(spline_marker);
+        
+        // 控制点可视化（用小球表示）
+        visualization_msgs::Marker control_pts_marker;
+        control_pts_marker.header = spline_marker.header;
+        control_pts_marker.ns = "bspline_control_points";
+        control_pts_marker.id = i + 1000;
+        control_pts_marker.type = visualization_msgs::Marker::SPHERE_LIST;
+        control_pts_marker.action = visualization_msgs::Marker::ADD;
+        control_pts_marker.scale.x = 0.08;
+        control_pts_marker.scale.y = 0.08;
+        control_pts_marker.scale.z = 0.08;
+        control_pts_marker.color.r = 1.0;
+        control_pts_marker.color.g = 0.0;
+        control_pts_marker.color.b = 1.0;  // 紫色
+        control_pts_marker.color.a = 0.6;
+        
+        for (const auto& cp : layer.trajectory.getControlPoints()) {
+            geometry_msgs::Point p;
+            p.x = cp.x();
+            p.y = cp.y();
+            p.z = cp.z();
+            control_pts_marker.points.push_back(p);
+        }
+        
+        markers.markers.push_back(control_pts_marker);
+    }
+    
+    bspline_vis_pub_.publish(markers);
+}
 
 // 主要任务执行函数保持不变...
 bool ShipPainterNode::waitForConnection() {
@@ -1678,10 +1217,116 @@ void ShipPainterNode::run() {
         return;
     }
     
-    // 8. 执行喷涂任务
-    bool mission_success = executeSprayMission();
+       
+    // 8. 生成B样条轨迹
+    ROS_INFO("Generating B-spline trajectories...");
+    publishBSplineTrajectories();
     
-    // 9. 降落
+    // 9. 生成接近轨迹
+    ROS_INFO("Generating approach trajectory...");
+    generateApproachTrajectory();
+    
+    if (!has_approach_trajectory_) {
+        ROS_ERROR("Failed to generate approach trajectory");
+        return;
+    }
+    
+    // 10. 等待2秒让无人机稳定
+    ROS_INFO("Waiting for drone to stabilize...");
+    ros::Duration(2.0).sleep();
+    
+    // 11. 构建并发布完整的B样条轨迹消息（接近轨迹 + 正式轨迹）
+    ROS_INFO("Publishing complete trajectory to trajectory_server...");
+    ship_painter::BsplineLayer msg;
+    
+    // 11.1 第一层：接近轨迹
+    ship_painter::Bspline approach_msg;
+    approach_msg.order = approach_trajectory_.getDegree();
+    approach_msg.start_time = ros::Time::now() + ros::Duration(1.0);  // 1秒后开始
+    approach_msg.duration = approach_trajectory_.getTotalTime();
+    
+    // 控制点
+    for (const auto& pt : approach_trajectory_.getControlPoints()) {
+        geometry_msgs::Point p;
+        p.x = pt.x();
+        p.y = pt.y();
+        p.z = pt.z();
+        approach_msg.pos_pts.push_back(p);
+    }
+    
+    // 节点向量
+    approach_msg.knots = approach_trajectory_.getKnots();
+    
+    // 法向量
+    for (const auto& normal : approach_trajectory_.getNormals()) {
+        geometry_msgs::Vector3 n;
+        n.x = normal.x();
+        n.y = normal.y();
+        n.z = normal.z();
+        approach_msg.normals.push_back(n);
+    }
+    
+    msg.layers.push_back(approach_msg);  // 添加接近轨迹作为第一层
+    
+    // 11.2 后续层：正式的喷涂轨迹
+    for (size_t i = 0; i < bspline_layers_.size(); i++) {
+        const auto& layer = bspline_layers_[i];
+        
+        ship_painter::Bspline bspline_msg;
+        bspline_msg.order = layer.trajectory.getDegree();
+        bspline_msg.start_time = ros::Time::now() + ros::Duration(2.0);  // 占位，实际由server控制
+        bspline_msg.duration = layer.trajectory.getTotalTime();
+        
+        // 控制点
+        for (const auto& pt : layer.trajectory.getControlPoints()) {
+            geometry_msgs::Point p;
+            p.x = pt.x();
+            p.y = pt.y();
+            p.z = pt.z();
+            bspline_msg.pos_pts.push_back(p);
+        }
+        
+        // 节点向量
+        bspline_msg.knots = layer.trajectory.getKnots();
+        
+        // 法向量
+        for (const auto& normal : layer.trajectory.getNormals()) {
+            geometry_msgs::Vector3 n;
+            n.x = normal.x();
+            n.y = normal.y();
+            n.z = normal.z();
+            bspline_msg.normals.push_back(n);
+        }
+        
+        msg.layers.push_back(bspline_msg);
+    }
+    
+    // 11.3 发布完整消息
+    bspline_pub_.publish(msg);
+    ROS_INFO("Published complete trajectory: 1 approach + %zu work layers = %zu total",
+             bspline_layers_.size(), msg.layers.size());
+    
+    // 12. 等待轨迹完成
+    ROS_INFO("Control handed to trajectory_server. Waiting for completion...");
+
+    ros::Time mission_start = ros::Time::now();
+    double mission_timeout = 300.0;  // 5分钟超时
+
+    while (ros::ok()) {
+        //只等待，不发送控制指令
+        
+        if ((ros::Time::now() - mission_start).toSec() > mission_timeout) {
+            ROS_WARN("Mission timeout, landing...");
+            break;
+        }
+        
+        ros::spinOnce();
+        rate.sleep();
+    }
+
+    bool mission_success = true;
+    
+    // 降落
     if (mission_success) {
         ROS_INFO("Mission successful! Landing...");
     } else {
@@ -1691,11 +1336,10 @@ void ShipPainterNode::run() {
     setMode("AUTO.LAND");
     ros::Duration(10.0).sleep();
     
-    // 10. 上锁
+    // 上锁
     disarm();
-    
-    ROS_INFO("Mission ended. Total waypoints reached: %zu", 
-            flight_state_.total_waypoints_reached);
+    ROS_INFO("Mission ended. B-spline trajectory execution complete.");
+
 }
 
 
@@ -1965,4 +1609,75 @@ void ShipPainterNode::reorderLayersByProximity() {
     }
     
     ROS_INFO("All layers reordered successfully");
+}
+
+// 生成从当前位置到第一层的B样条接近轨迹
+void ShipPainterNode::generateApproachTrajectory() {
+    if (bspline_layers_.empty()) {
+        ROS_ERROR("No B-spline layers available for approach trajectory");
+        return;
+    }
+    
+    // 获取当前位置
+    Eigen::Vector3d current_pos(
+        flight_state_.current_pose.pose.position.x,
+        flight_state_.current_pose.pose.position.y,
+        flight_state_.current_pose.pose.position.z
+    );
+    
+    // 获取第一层的第一个控制点
+    const auto& first_layer = bspline_layers_[0];
+    const auto& control_points = first_layer.trajectory.getControlPoints();
+    
+    if (control_points.empty()) {
+        ROS_ERROR("First layer has no control points");
+        return;
+    }
+    
+    Eigen::Vector3d target_pos = control_points[0];
+    
+    ROS_INFO("Generating approach trajectory from [%.2f, %.2f, %.2f] to [%.2f, %.2f, %.2f]",
+             current_pos.x(), current_pos.y(), current_pos.z(),
+             target_pos.x(), target_pos.y(), target_pos.z());
+    
+    // 创建起飞位置的临时层
+    PathPlanner::BSplineLayer takeoff_layer;
+    
+    // 3个控制点：起点 - 中点 - 终点（生成平滑过渡）
+    std::vector<Eigen::Vector3d> transition_points;
+    std::vector<Eigen::Vector3d> transition_normals;
+    
+    // 起点：当前位置
+    transition_points.push_back(current_pos);
+    transition_normals.push_back(Eigen::Vector3d(0, 0, -1));
+    
+    // 中点：插值位置
+    Eigen::Vector3d mid_pos = (current_pos + target_pos) * 0.5;
+    transition_points.push_back(mid_pos);
+    transition_normals.push_back(Eigen::Vector3d(0, 0, -1));
+    
+    // 终点：第一层第一个点
+    transition_points.push_back(target_pos);
+    
+    // 获取第一层第一个点的法向量
+    const auto& first_normals = first_layer.trajectory.getNormals();
+    if (!first_normals.empty()) {
+        transition_normals.push_back(first_normals[0]);
+    } else {
+        transition_normals.push_back(Eigen::Vector3d(0, 0, -1));
+    }
+    
+    // 拟合接近轨迹（不闭合）
+    approach_trajectory_.fitFromContour(
+        transition_points,
+        transition_normals,
+        params_.flight_speed,  // 使用设定的飞行速度
+        false  // 不闭合
+    );
+    
+    has_approach_trajectory_ = true;
+    
+    double distance = (target_pos - current_pos).norm();
+    ROS_INFO("Approach trajectory generated: %.2f meters, %.2f seconds @ %.2f m/s",
+             distance, approach_trajectory_.getTotalTime(), params_.flight_speed);
 }

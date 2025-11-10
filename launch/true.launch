@@ -21,7 +21,7 @@
         <param name="mavros_ns" value="/mavros"/><!--真机话题-->
         
         <!-- STL模型路径 -->
-        <param name="model_path" value="$(find ship_painter)/models/test.stl"/>
+        <param name="model_path" value="$(find ship_painter)/models/model4cube.stl"/>
         
         <!-- 路径规划参数 -->
         <param name="alpha_shape_value" value="1.5"/>
@@ -31,7 +31,9 @@
         <param name="use_position_control" value="true"/>
         
         <!-- 步长设置 -->
-        <param name="resample_spacing" value="0.5" type="double" />
+        <param name="resample_spacing" value="0.2" type="double" />
+        <param name="flight_speed" value="0.8"/>        <!-- 巡航速度 (m/s) -->
+        <param name="transition_speed" value="0.003"/>    <!-- 层间过渡速度 (m/s) -->
             
         <!-- rviz中模型位置显示参数 -->
         <param name="display_model_x" value="3.75"/>
@@ -61,13 +63,18 @@
         
         <!--飞行参数-->
         <param name="takeoff_height" value="2.0"/>           <!-- 起飞高度：2米 -->
-        <param name="flight_speed" value="0.5"/>             <!-- 飞行速度：0.5m/s -->
-        <param name="waypoint_tolerance" value="0.3"/>       <!-- 位置容差：0.3米 -->
+        <param name="waypoint_tolerance" value="0.1"/>       <!-- 位置容差：0.3米 -->
         
         <param name="frame_id" value="world"/>
+
+    <!-- B样条轨迹服务器 -->
     </node>
 
         <!-- 启动 RViz 可视化 -->
     <node name="rviz" pkg="rviz" type="rviz" args="-d $(find ship_painter)/rviz/true_ship_painter.rviz"/>
+
+    <!--node pkg="ship_painter" type="trajectory_server_node" name="trajectory_server" output="screen">
+        <param name="mavros_ns" value="/iris_0/mavros" />
+    </node-->
     
 </launch>

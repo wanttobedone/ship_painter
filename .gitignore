@@ -9,9 +9,7 @@ devel/
 *.so
 *.a
 build/
-
 # 第三方库(如果已包含在项目中)
-thirdparty/Clipper2/
 
 # IDE
 .vscode/

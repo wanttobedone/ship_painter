@@ -22,6 +22,7 @@
 #include <map>
 #include <set>
 #include <limits>
+#include "ship_painter/bspline.h"
 
 PathPlanner::PathPlanner(const PlannerConfig& config) 
     : config_(config), model_loaded_(false), model_center_(Eigen::Vector3d::Zero()) {
@@ -1269,5 +1270,130 @@ Eigen::Vector3d PathPlanner::computeContourCenter(const std::vector<Eigen::Vecto
     return center;
 }
 
+std::vector<PathPlanner::BSplineLayer> PathPlanner::generateBSplineLayers(
+    const Eigen::Vector3d& model_position,
+    const Eigen::Vector3d& model_rotation) {
+    
+    std::vector<BSplineLayer> bspline_layers;
+    
+    // 1. 先用原有方法生成航点路径
+    std::vector<PathLayer> path_layers = generateSprayPath(
+        model_position, model_rotation);
+    
+    // 2. 为每层拟合B样条
+    for (size_t i = 0; i < path_layers.size(); i++) {
+        const auto& layer = path_layers[i];
+        
+        if (layer.waypoints.empty()) continue;
+        
+        // 提取位置和法向量
+        std::vector<Eigen::Vector3d> positions;
+        std::vector<Eigen::Vector3d> normals;
+        
+        for (const auto& wp : layer.waypoints) {
+            positions.push_back(wp.position);
+            normals.push_back(wp.surface_normal);
+        }
+        
+        // 拟合B样条（闭合）
+        BSplineLayer bspline_layer;
+        bspline_layer.trajectory.fitFromContour(
+            positions, 
+            normals,
+            config_.flight_speed,  // 使用配置中的速度
+            true  // 闭合
+        );
+        bspline_layer.z_height = layer.z_center;
+        bspline_layer.layer_index = i;
+        
+        bspline_layers.push_back(bspline_layer);
+        
+        ROS_INFO("Layer %zu: B-spline with %.2f seconds", 
+                 i, bspline_layer.trajectory.getTotalTime());
+    }
+    
+    return bspline_layers;
+}
 
+ship_painter::BSpline PathPlanner::generateTransition(
+    const BSplineLayer& from_layer,
+    const BSplineLayer& to_layer,
+    double transition_speed) {
+    
+    // 获取起点和终点
+    double t_end = from_layer.trajectory.getTotalTime();
+    Eigen::Vector3d start_pos = from_layer.trajectory.getPosition(t_end);
+    Eigen::Vector3d start_normal = from_layer.trajectory.getNormal(t_end);
+    
+    Eigen::Vector3d end_pos = to_layer.trajectory.getPosition(0.0);
+    Eigen::Vector3d end_normal = to_layer.trajectory.getNormal(0.0);
+    
+    // 生成斜线过渡（3个控制点：起点-中点-终点）
+    std::vector<Eigen::Vector3d> transition_points;
+    std::vector<Eigen::Vector3d> transition_normals;
+    
+    transition_points.push_back(start_pos);
+    transition_normals.push_back(start_normal);
+    
+    // 中间点（可选，使过渡更平滑）
+    Eigen::Vector3d mid_pos = (start_pos + end_pos) * 0.5;
+    Eigen::Vector3d mid_normal = (start_normal + end_normal).normalized();
+    transition_points.push_back(mid_pos);
+    transition_normals.push_back(mid_normal);
+    
+    transition_points.push_back(end_pos);
+    transition_normals.push_back(end_normal);
+    
+    // 拟合过渡轨迹（不闭合）
+    ship_painter::BSpline transition;
+    transition.fitFromContour(
+        transition_points,
+        transition_normals,
+        transition_speed,
+        false  // 不闭合
+    );
+    
+    return transition;
+}
 
+std::vector<PathPlanner::BSplineLayer> PathPlanner::generateBSplineLayersFromPath(
+    const std::vector<PathLayer>& path_layers) {
+    
+    std::vector<BSplineLayer> bspline_layers;
+    
+    ROS_INFO("Generating B-splines from transformed path layers (%zu layers)", path_layers.size());
+    
+    // 直接使用传入的path_layers，不重新生成
+    for (size_t i = 0; i < path_layers.size(); i++) {
+        const auto& layer = path_layers[i];
+        
+        if (layer.waypoints.empty()) continue;
+        
+        // 提取位置和法向量
+        std::vector<Eigen::Vector3d> positions;
+        std::vector<Eigen::Vector3d> normals;
+        
+        for (const auto& wp : layer.waypoints) {
+            positions.push_back(wp.position);
+            normals.push_back(wp.surface_normal);
+        }
+        
+        // 拟合B样条（闭合）
+        BSplineLayer bspline_layer;
+        bspline_layer.trajectory.fitFromContour(
+            positions, 
+            normals,
+            config_.flight_speed,  // 使用配置中的速度
+            true  // 闭合
+        );
+        bspline_layer.z_height = layer.z_center;
+        bspline_layer.layer_index = i;
+        
+        bspline_layers.push_back(bspline_layer);
+        
+        ROS_INFO("Layer %zu: B-spline with %.2f seconds (from transformed waypoints)", 
+                 i, bspline_layer.trajectory.getTotalTime());
+    }
+    
+    return bspline_layers;
+}

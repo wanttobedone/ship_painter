@@ -1,6 +1,7 @@
 <launch>
     
     <arg name="traverse_clockwise" default="true"/><!--true顺时针，false逆时针-->
+
     <!-- 启动路径规划节点 -->
     <group ns="iris_0">
         <node name="ship_painter_node" pkg="ship_painter" type="ship_painter_node" output="screen">
@@ -10,12 +11,14 @@
             <param name="model_path" value="$(find ship_painter)/models/model4cube.stl"/>
 
             <!-- 路径规划参数 -->
-            <param name="alpha_shape_value" value="0.5"/>
+            <param name="alpha_shape_value" value="2"/>
             <param name="target_sample_count" value="500000"/>
-            <param name="path_offset_distance" value="3.0"/> <!--真实世界中模型位于无人机前方几米处-->
+            <param name="path_offset_distance" value="5.0"/> <!--真实世界中模型位于无人机前方几米处-->
             <!--步长设置-->
-            <param name="resample_spacing" value="0.1" type="double" />
-                
+            <param name="resample_spacing" value="0.01" type="double" />
+            <param name="flight_speed" value="0.8"/>        <!-- 巡航速度 (m/s) -->
+            <param name="transition_speed" value="0.003"/>    <!-- 层间过渡速度 (m/s) -->
+
             <!-- rviz中模型位置显示参数 -->
             <param name="display_model_x" value="3.75"/>
             <param name="display_model_y" value="-0.56"/>
@@ -47,9 +50,12 @@
             <param name="takeoff_height" value="2.0"/>
             <param name="waypoint_tolerance" value="0.2"/>   <!-- 减小位置容差，暂未用到 -->
             <param name="orientation_tolerance" value="0.15"/><!-- 姿态容差(约8.5度) -->
-            <param name="flight_speed" value="0.8"/>         <!-- 降低飞行速度确保姿态稳定 -->
             
             <param name="frame_id" value="world"/>
+        </node>
+        <!-- B样条轨迹服务器 -->
+        <node pkg="ship_painter" type="trajectory_server_node" name="trajectory_server" output="screen">
+            <param name="mavros_ns" value="/iris_0/mavros" />
         </node>
     </group>
     
@@ -61,6 +67,6 @@
           args="0 0 0 0 0 0 world map 100"/>
     
     <!-- 诊断信息显示 -->
-    <node name="rqt_console" pkg="rqt_console" type="rqt_console" 
-          launch-prefix="bash -c 'sleep 2; $0 $@' "/>
+    <!--node name="rqt_console" pkg="rqt_console" type="rqt_console" 
+          launch-prefix="bash -c 'sleep 2; $0 $@' "/-->
 </launch>

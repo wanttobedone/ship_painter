@@ -12,7 +12,7 @@
     
     <!-- 定义船体模型位置参数（统一管理） -->
     <arg name="ship_x" default="4.08"/>
-    <arg name="ship_y" default="6.7"/>
+    <arg name="ship_y" default="8"/>
     <arg name="ship_z" default="0.125"/>
     
     <!-- 生成船体模型 -->

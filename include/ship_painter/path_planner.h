@@ -7,6 +7,7 @@
 #include <Eigen/Dense>
 #include <vector>
 #include "clipper2/clipper.h"
+#include "ship_painter/bspline.h" 
 
 // 喷涂参数宏定义
 #define SPRAY_RADIUS 0.125          // 喷雾半径 (m)
@@ -16,6 +17,27 @@
 
 class PathPlanner {
 public:
+
+    //生成B样条轨迹
+    struct BSplineLayer {
+        ship_painter::BSpline trajectory;      // 该层的B样条
+        double z_height;         // 层高
+        int layer_index;         // 层索引
+    };
+    
+    // 生成所有层的B样条轨迹
+    std::vector<BSplineLayer> generateBSplineLayers(
+        const Eigen::Vector3d& model_position,
+        const Eigen::Vector3d& model_rotation
+    );
+
+    
+    // 生成层间过渡轨迹
+    ship_painter::BSpline generateTransition(  
+        const BSplineLayer& from_layer,
+        const BSplineLayer& to_layer,
+        double transition_speed
+    );
 
     struct Waypoint {
         Eigen::Vector3d position;      // 位置
@@ -38,6 +60,11 @@ public:
         
         PathLayer(double z) : z_center(z), is_closed(true) {}
     };
+
+    //从已有path_layers生成B样条（用于真机）
+    std::vector<BSplineLayer> generateBSplineLayersFromPath(
+        const std::vector<PathLayer>& path_layers
+    );
 
     // 点云可视化
     pcl::PointCloud<pcl::PointNormal>::Ptr getProcessedCloud() const;
@@ -78,8 +105,10 @@ public:
         double normal_angle_threshold;   // 法向量角度阈值（弧度）
         bool enable_normal_smoothing;    // 是否启用法向量平滑
 
-        double resample_spacing;  // 等距插值间隔 (m)
+        double flight_speed;        //速度参数
+        double transition_speed;    //层间过渡速度
         
+        double resample_spacing;  // 等距插值间隔 (m)
         PlannerConfig() :
             spray_radius(SPRAY_RADIUS),
             spray_distance(SPRAY_DISTANCE),
@@ -96,6 +125,8 @@ public:
             use_clipper_offset(true),
             normal_angle_threshold(0.26),  // 法向量平滑插值阈值，弧度制
             enable_normal_smoothing(true),
+            flight_speed(0.5),//B样条速度字段
+            transition_speed(0.3),
             resample_spacing(0.02) {}//步长，默认0.02m
     };
 
