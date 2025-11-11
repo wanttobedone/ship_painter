@@ -32,7 +32,7 @@
         
         <!-- 步长设置 -->
         <param name="resample_spacing" value="0.2" type="double" />
-        <param name="flight_speed" value="0.4"/>        <!-- 巡航速度 (m/s) -->
+        <param name="flight_speed" value="0.2"/>        <!-- 巡航速度 (m/s) -->
         <param name="transition_speed" value="0.003"/>    <!-- 层间过渡速度 (m/s) -->
             
         <!-- rviz中模型位置显示参数 -->
@@ -74,7 +74,7 @@
     <node name="rviz" pkg="rviz" type="rviz" args="-d $(find ship_painter)/rviz/true_ship_painter.rviz"/>
 
     <node pkg="ship_painter" type="trajectory_server_node" name="trajectory_server" output="screen">
-        <param name="mavros_ns" value="/iris_0/mavros" />
+        <param name="mavros_ns" value="/mavros" />
     </node>
     
 </launch>
