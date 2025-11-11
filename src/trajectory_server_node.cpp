@@ -28,7 +28,7 @@ public:
         
         // 控制定时器（100Hz）
         control_timer_ = nh_.createTimer(
-            ros::Duration(0.01),
+            ros::Duration(0.005),
             &TrajectoryServer::controlLoop, this);
         
         current_layer_idx_ = 0;
@@ -89,6 +89,36 @@ void TrajectoryServer::bsplineCallback(
     current_layer_idx_ = 0;
     
     ROS_INFO("Trajectory server: Loaded %zu layers", layers_.size());
+
+    if (!layers_.empty()) {
+        const auto& first_traj = layers_[0];
+        Eigen::Vector3d p = first_traj.getPosition(0.0);
+        Eigen::Vector3d v = first_traj.getVelocity(0.0);
+        Eigen::Vector3d n = first_traj.getNormal(0.0);
+        
+        mavros_msgs::PositionTarget target;
+        target.header.stamp = ros::Time::now();
+        target.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED;
+        
+        target.position.x = p.x();
+        target.position.y = p.y();
+        target.position.z = p.z();
+        
+        target.velocity.x = v.x();
+        target.velocity.y = v.y();
+        target.velocity.z = v.z();
+        
+        target.yaw = std::atan2(-n.y(), -n.x());
+        target.yaw_rate = 0.0;
+        
+        target.type_mask = 
+            mavros_msgs::PositionTarget::IGNORE_AFX |
+            mavros_msgs::PositionTarget::IGNORE_AFY |
+            mavros_msgs::PositionTarget::IGNORE_AFZ;
+        
+        setpoint_pub_.publish(target);
+        ROS_INFO("Published first setpoint immediately");
+    }
 }
 
 void TrajectoryServer::controlLoop(const ros::TimerEvent& event) {
@@ -114,9 +144,43 @@ void TrajectoryServer::controlLoop(const ros::TimerEvent& event) {
             t = 0.0;
             
             if (current_layer_idx_ >= layers_.size()) {
-                trajectory_active_ = false;
-                ROS_INFO("All layers completed!");
-                return;
+                ROS_INFO_ONCE("All layers completed! Hovering at final position...");
+    
+                // 获取最后一层的最后位置
+                const auto& last_traj = layers_.back();
+                double last_t = last_traj.getTotalTime();
+                
+                Eigen::Vector3d p = last_traj.getPosition(last_t);
+                Eigen::Vector3d v = Eigen::Vector3d::Zero();  // hover速度为0
+                Eigen::Vector3d n = last_traj.getNormal(last_t);
+                double yaw = std::atan2(-n.y(), -n.x());
+            
+                // 发布hover指令
+                mavros_msgs::PositionTarget target;
+                target.header.stamp = ros::Time::now();
+                target.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED;
+                
+                target.position.x = p.x();
+                target.position.y = p.y();
+                target.position.z = p.z();
+                
+                target.velocity.x = 0.0;
+                target.velocity.y = 0.0;
+                target.velocity.z = 0.0;
+                
+                target.yaw = yaw;
+                target.yaw_rate = 0.0;
+                
+                target.type_mask = 
+                    mavros_msgs::PositionTarget::IGNORE_AFX |
+                    mavros_msgs::PositionTarget::IGNORE_AFY |
+                    mavros_msgs::PositionTarget::IGNORE_AFZ;
+                
+                setpoint_pub_.publish(target);
+                
+                ROS_INFO_THROTTLE(2.0, "Hovering at final position: [%.2f, %.2f, %.2f]",
+                                p.x(), p.y(), p.z());
+                return;  // 继续hover，不要设置trajectory_active_ = false
             }
         }
         

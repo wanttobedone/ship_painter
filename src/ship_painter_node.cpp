@@ -26,6 +26,7 @@ private:
     // 订阅和发布
     ros::Subscriber state_sub_;
     ros::Subscriber pose_sub_;
+    ros::Subscriber trajectory_setpoint_sub_; //交接标志位
     ros::Publisher spray_vis_pub_;
     ros::Publisher model_vis_pub_;
 
@@ -57,6 +58,9 @@ private:
     ros::Publisher alphashape_vis_pub_;//as轮廓发布
     ros::Publisher offset_contour_vis_pub_;  // 偏移轮廓可视化发布者
     ros::Publisher bspline_vis_pub_;//B样条可视化
+
+    //轨迹交接标志
+    bool received_trajectory_setpoint_; 
     
     // 状态管理
     struct FlightState {
@@ -122,6 +126,8 @@ private:
     void poseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg);
     void visualizationTimerCallback(const ros::TimerEvent& event);
 
+    void trajectorySetpointCallback(const mavros_msgs::PositionTarget::ConstPtr& msg);//交接位
+
     
     // 飞行控制
     bool waitForConnection();
@@ -158,7 +164,7 @@ private:
     void reorderLayersByProximity();
 };
 
-ShipPainterNode::ShipPainterNode() : nh_private_("~") {
+ShipPainterNode::ShipPainterNode() : nh_private_("~"), received_trajectory_setpoint_(false){
     if (!loadParameters()) {
         ROS_ERROR("Failed to load parameters");
         ros::shutdown();
@@ -219,6 +225,13 @@ ShipPainterNode::ShipPainterNode() : nh_private_("~") {
     // 设置定时器
     
     ROS_INFO("Ship Painter Node initialized");
+
+    //订阅trajectory_server发布的setpoint
+    trajectory_setpoint_sub_ = nh_.subscribe(
+        params_.mavros_ns + "/setpoint_raw/local", 
+        10, 
+        &ShipPainterNode::trajectorySetpointCallback, 
+        this);
 }
 
 bool ShipPainterNode::loadParameters() {
@@ -1231,9 +1244,34 @@ void ShipPainterNode::run() {
         return;
     }
     
-    // 10. 等待2秒让无人机稳定
+    // 10. 等待2秒让无人机稳定（同时持续发送hold指令）
     ROS_INFO("Waiting for drone to stabilize...");
-    ros::Duration(2.0).sleep();
+    ros::Time stabilize_start = ros::Time::now();
+    double stabilize_duration = 2.0;
+
+    mavros_msgs::PositionTarget stabilize_cmd;
+    stabilize_cmd.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED;
+    stabilize_cmd.type_mask = 
+        mavros_msgs::PositionTarget::IGNORE_VX |
+        mavros_msgs::PositionTarget::IGNORE_VY |
+        mavros_msgs::PositionTarget::IGNORE_VZ |
+        mavros_msgs::PositionTarget::IGNORE_AFX |
+        mavros_msgs::PositionTarget::IGNORE_AFY |
+        mavros_msgs::PositionTarget::IGNORE_AFZ |
+        mavros_msgs::PositionTarget::IGNORE_YAW |
+        mavros_msgs::PositionTarget::IGNORE_YAW_RATE;
+
+    while (ros::ok() && (ros::Time::now() - stabilize_start).toSec() < stabilize_duration) {
+        stabilize_cmd.header.stamp = ros::Time::now();
+        stabilize_cmd.position.x = flight_state_.current_pose.pose.position.x;
+        stabilize_cmd.position.y = flight_state_.current_pose.pose.position.y;
+        stabilize_cmd.position.z = flight_state_.current_pose.pose.position.z;
+        
+        setpoint_raw_pub_.publish(stabilize_cmd);
+        ros::spinOnce();
+        rate.sleep();
+    }
+    ROS_INFO("Stabilization complete");
     
     // 11. 构建并发布完整的B样条轨迹消息（接近轨迹 + 正式轨迹）
     ROS_INFO("Publishing complete trajectory to trajectory_server...");
@@ -1305,6 +1343,47 @@ void ShipPainterNode::run() {
     bspline_pub_.publish(msg);
     ROS_INFO("Published complete trajectory: 1 approach + %zu work layers = %zu total",
              bspline_layers_.size(), msg.layers.size());
+    
+    ROS_INFO("Maintaining setpoint stream, waiting for trajectory_server to take over...");
+
+    received_trajectory_setpoint_ = false;  // 重置标志
+    ros::Time handover_start = ros::Time::now();
+    double handover_timeout = 2.0;  // 最多等2秒，防止卡死
+
+    mavros_msgs::PositionTarget hold_cmd;
+    hold_cmd.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED;
+    hold_cmd.type_mask = 
+        mavros_msgs::PositionTarget::IGNORE_VX |
+        mavros_msgs::PositionTarget::IGNORE_VY |
+        mavros_msgs::PositionTarget::IGNORE_VZ |
+        mavros_msgs::PositionTarget::IGNORE_AFX |
+        mavros_msgs::PositionTarget::IGNORE_AFY |
+        mavros_msgs::PositionTarget::IGNORE_AFZ |
+        mavros_msgs::PositionTarget::IGNORE_YAW |
+        mavros_msgs::PositionTarget::IGNORE_YAW_RATE;
+
+    while (ros::ok() && !received_trajectory_setpoint_) {
+        // 超时检查
+        if ((ros::Time::now() - handover_start).toSec() > handover_timeout) {
+            ROS_WARN("Handover timeout! trajectory_server may not be running properly");
+            break;
+        }
+        
+        hold_cmd.header.stamp = ros::Time::now();
+        hold_cmd.position.x = flight_state_.current_pose.pose.position.x;
+        hold_cmd.position.y = flight_state_.current_pose.pose.position.y;
+        hold_cmd.position.z = flight_state_.current_pose.pose.position.z;
+        
+        setpoint_raw_pub_.publish(hold_cmd);
+        ros::spinOnce();  // 处理回调，接收trajectory_server的setpoint
+        rate.sleep();
+    }
+
+    if (received_trajectory_setpoint_) {
+        ROS_INFO("Handover complete, trajectory_server is now in control");
+    } else {
+        ROS_ERROR("Handover failed! Continuing anyway...");
+    }
     
     // 12. 等待轨迹完成
     ROS_INFO("Control handed to trajectory_server. Waiting for completion...");
@@ -1680,4 +1759,14 @@ void ShipPainterNode::generateApproachTrajectory() {
     double distance = (target_pos - current_pos).norm();
     ROS_INFO("Approach trajectory generated: %.2f meters, %.2f seconds @ %.2f m/s",
              distance, approach_trajectory_.getTotalTime(), params_.flight_speed);
+}
+
+void ShipPainterNode::trajectorySetpointCallback(
+    const mavros_msgs::PositionTarget::ConstPtr& msg) {
+    
+    // 只在等待交接期间处理
+    if (!received_trajectory_setpoint_) {
+        received_trajectory_setpoint_ = true;
+        ROS_INFO("Received first setpoint from trajectory_server, handover confirmed");
+    }
 }
