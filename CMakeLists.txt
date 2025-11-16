@@ -17,6 +17,8 @@ add_definitions(-DCGAL_DO_NOT_WARN_ABOUT_CMAKE_BUILD_TYPE)
 find_package(catkin REQUIRED COMPONENTS
   roscpp
   rospy
+  cv_bridge
+  image_transport
   std_msgs
   geometry_msgs
   mavros_msgs
@@ -66,6 +68,11 @@ if(NOT TARGET Eigen3::Eigen)
     INTERFACE_INCLUDE_DIRECTORIES "${EIGEN3_INCLUDE_DIR}")
 endif()
 
+find_package(OpenCV REQUIRED)
+include_directories(
+  ${catkin_INCLUDE_DIRS}
+  ${OpenCV_INCLUDE_DIRS}
+)
 # 查找Boost
 find_package(Boost REQUIRED COMPONENTS system filesystem)
 
@@ -276,3 +283,12 @@ install(DIRECTORY worlds/
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/worlds
   FILES_MATCHING PATTERN "*.world"
 )
+
+#后续删除
+add_executable(depth_test_node src/depth_test_node.cpp)
+target_link_libraries(depth_test_node ${catkin_LIBRARIES} ${OpenCV_LIBRARIES})
+
+target_link_libraries(depth_test_node 
+  ${catkin_LIBRARIES} 
+  ${OpenCV_LIBRARIES}
+  )
