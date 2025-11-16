@@ -14,7 +14,67 @@
 
 class TrajectoryServer {
 public:
-    TrajectoryServer() : nh_("~") {
+    TrajectoryServer();  // 只声明,不实现
+    
+private:
+    // 先声明所有成员变量
+    ros::NodeHandle nh_;
+    ros::Subscriber bspline_sub_;
+    ros::Publisher setpoint_pub_;
+    ros::Timer control_timer_;
+    ros::Publisher trajectory_vis_pub_;
+    
+    std::vector<ship_painter::BSpline> layers_;
+    std::vector<ship_painter::BSpline> transitions_;
+    
+    size_t current_layer_idx_;
+    bool trajectory_active_;
+    ros::Time trajectory_start_time_;
+
+    // 深度控制相关
+    ros::Subscriber depth_sub_;
+    ros::Subscriber pose_sub_;
+    
+    struct DepthState {
+        float distance;
+        bool valid;
+        ros::Time last_update;
+        float last_distance;
+        
+        DepthState() : distance(0.0), valid(false), last_distance(0.0) {}
+    } depth_state_;
+    
+    geometry_msgs::PoseStamped current_pose_;
+    bool pose_received_;
+    
+    // 控制参数
+    bool enable_depth_correction_;
+    float target_distance_;
+    float distance_kp_;
+    float distance_ki_;
+    float distance_kd_;
+    float max_correction_;
+    float camera_offset_x_;
+    float camera_offset_y_;
+    float camera_offset_z_;
+    float depth_timeout_;
+    float depth_min_range_;
+    float depth_max_range_;
+    float depth_jump_threshold_;
+    bool debug_output_;
+    
+    // 方法声明
+    void bsplineCallback(const ship_painter::BsplineLayer::ConstPtr& msg);
+    void controlLoop(const ros::TimerEvent& event);
+    void depthCallback(const sensor_msgs::ImageConstPtr& msg);
+    void poseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg);
+    bool checkDepthValid();
+    double getCurrentYaw();
+    void loadParameters();
+};
+
+// 构造函数实现移到类外(在第139行 bsplineCallback 之前)
+TrajectoryServer::TrajectoryServer() : nh_("~"), pose_received_(false) {
     // 获取mavros命名空间参数
     std::string mavros_ns;
     nh_.param<std::string>("mavros_ns", mavros_ns, "/mavros");
@@ -28,23 +88,22 @@ public:
         mavros_ns + "/setpoint_raw/local", 10);
 
     trajectory_vis_pub_ = nh_.advertise<visualization_msgs::Marker>(
-        "/visualization/current_trajectory", 10);  // B样条颜色
+        "/visualization/current_trajectory", 10);
     
-    // 打印调试信息
     ROS_INFO("Trajectory server publishing to: %s/setpoint_raw/local", mavros_ns.c_str());
         
-        // 控制定时器（100Hz）
-        control_timer_ = nh_.createTimer(
-            ros::Duration(0.005),
-            &TrajectoryServer::controlLoop, this);
-        
-        current_layer_idx_ = 0;
-        trajectory_active_ = false;
+    // 控制定时器(100Hz)
+    control_timer_ = nh_.createTimer(
+        ros::Duration(0.005),
+        &TrajectoryServer::controlLoop, this);
+    
+    current_layer_idx_ = 0;
+    trajectory_active_ = false;
 
-    //加载参数
+    // 加载参数
     loadParameters();
     
-    //深度相机订阅
+    // 深度相机订阅
     if (enable_depth_correction_) {
         depth_sub_ = nh_.subscribe("/camera/aligned_depth_to_color/image_raw", 
                                    1, &TrajectoryServer::depthCallback, this);
@@ -53,7 +112,7 @@ public:
         ROS_INFO("Depth correction disabled.");
     }
     
-    //姿态订阅（获取yaw角
+    // 姿态订阅
     pose_sub_ = nh_.subscribe(mavros_ns + "/local_position/pose", 
                               10, &TrajectoryServer::poseCallback, this);
     
@@ -67,74 +126,9 @@ public:
         ROS_INFO("  Depth range: [%.2f, %.2f] m", depth_min_range_, depth_max_range_);
     }
 }
-    }
-    
-private:
-    ros::NodeHandle nh_;
-    ros::Subscriber bspline_sub_;
-    ros::Publisher setpoint_pub_;
-    ros::Timer control_timer_;
 
-    ros::Publisher trajectory_vis_pub_; 
     
-    std::vector<ship_painter::BSpline> layers_;
-    std::vector<ship_painter::BSpline> transitions_;
-    
-    size_t current_layer_idx_;
-    bool trajectory_active_;
-    ros::Time trajectory_start_time_;
 
-    //深度控制相关 
-    // 订阅器
-    ros::Subscriber depth_sub_;           // 深度图像订阅
-    ros::Subscriber pose_sub_;            // 姿态订阅（获取yaw）
-    
-    // 深度状态
-    struct DepthState {
-        float distance;                   // 当前距离（米）
-        bool valid;                       // 数据有效性
-        ros::Time last_update;            // 最后更新时间
-        float last_distance;              // 上次距离（用于突变检测）
-        
-        DepthState() : distance(0.0), valid(false), last_distance(0.0) {}
-    } depth_state_;
-    
-    // 当前姿态
-    geometry_msgs::PoseStamped current_pose_;
-    bool pose_received_ = false;
-    
-    // 控制参数（从launch文件读取）
-    bool enable_depth_correction_;        // 功能开关
-    float target_distance_;               // 目标距离（米）
-    float distance_kp_;                   // 比例增益
-    float distance_ki_;                   // 积分增益（暂不用）
-    float distance_kd_;                   // 微分增益（暂不用）
-    float max_correction_;                // 最大修正量（米）
-    
-    // 相机偏移参数（机体坐标系）
-    float camera_offset_x_;               // 前后偏移（正=前）
-    float camera_offset_y_;               // 左右偏移（正=右）
-    float camera_offset_z_;               // 上下偏移（正=上）
-    
-    // 深度数据有效性检查参数
-    float depth_timeout_;                 // 超时时间（秒）
-    float depth_min_range_;               // 最小有效距离（米）
-    float depth_max_range_;               // 最大有效距离（米）
-    float depth_jump_threshold_;          // 突变阈值（米）
-    
-    bool debug_output_;                   // 调试输出开关
-    
-    //方法声明
-    void depthCallback(const sensor_msgs::ImageConstPtr& msg);
-    void poseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg);
-    bool checkDepthValid();
-    double getCurrentYaw();
-    void loadParameters();
-    //
-
-    void bsplineCallback(const ship_painter::BsplineLayer::ConstPtr& msg);
-    void controlLoop(const ros::TimerEvent& event);
-};
 
 void TrajectoryServer::bsplineCallback(
     const ship_painter::BsplineLayer::ConstPtr& msg) {
