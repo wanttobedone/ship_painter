@@ -22,10 +22,13 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   geometry_msgs
   mavros_msgs
+  sensor_msgs        
+  cv_bridge          
+  image_transport    
+  tf2                
+  tf2_geometry_msgs  
   visualization_msgs
-  tf2
   tf2_ros
-  tf2_geometry_msgs
   pcl_ros
   pcl_conversions
 )
@@ -166,6 +169,8 @@ catkin_package(
     geometry_msgs 
     mavros_msgs 
     visualization_msgs
+    sensor_msgs
+    cv_bridge 
     tf2
     tf2_ros
     tf2_geometry_msgs
@@ -176,6 +181,7 @@ catkin_package(
     EIGEN3
     Boost
     CGAL
+    OpenCV
 )
 
 # === 包含目录 ===
@@ -229,6 +235,7 @@ add_executable(trajectory_server_node src/trajectory_server_node.cpp)
 target_link_libraries(trajectory_server_node 
     bspline
     ${catkin_LIBRARIES}
+    ${OpenCV_LIBRARIES} 
 )
 add_dependencies(trajectory_server_node ${PROJECT_NAME}_generate_messages_cpp)
 
