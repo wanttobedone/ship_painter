@@ -341,7 +341,7 @@ bool ShipPainterNode::generateSprayPath() {
     }
     
     flight_state_.path_ready = true;
-    printMissionSummary();
+    // printMissionSummary();//不再汇总打印
     
     return true;
 }
@@ -952,11 +952,11 @@ void ShipPainterNode::publishNormalVisualization() {
 
     normal_vis_pub_.publish(marker_array);
 
-    static int debug_counter = 0;
-    if (debug_counter % 100 == 0) {
-        ROS_INFO_THROTTLE(10, "Publishing normal vectors visualization (arrows): %zu markers", marker_array.markers.size());
-    }
-    debug_counter++;
+    // static int debug_counter = 0;
+    // if (debug_counter % 100 == 0) {
+    //     ROS_INFO_THROTTLE(10, "Publishing normal vectors visualization (arrows): %zu markers", marker_array.markers.size());
+    // }
+    // debug_counter++;
 }
 
 //B样条轨迹
@@ -1569,8 +1569,9 @@ void ShipPainterNode::reorderLayersByProximity() {
                   return a.z_center > b.z_center;
               });
     
-    ROS_INFO("Layers sorted by height: %zu layers, top layer z=%.2f", 
-             path_layers_.size(), path_layers_[0].z_center);
+    ROS_INFO("Layer reordering: %zu layers, %s direction", 
+         path_layers_.size(), 
+         params_.traverse_clockwise ? "Clockwise" : "Counter-clockwise");
     
     // 辅助函数：计算层中心
     auto computeLayerCenter = [](const std::vector<PathPlanner::Waypoint>& waypoints) -> Eigen::Vector3d {
@@ -1683,11 +1684,11 @@ void ShipPainterNode::reorderLayersByProximity() {
         // 按全局方向排序
         reorderByAngle(current_layer, layer_center, closest_idx, params_.traverse_clockwise);
         
-        ROS_INFO("Layer %zu reordered: start from point closest to prev layer (was index %zu)",
-                 layer_idx, closest_idx);
+        // ROS_INFO("Layer %zu reordered: start from point closest to prev layer (was index %zu)",
+        //          layer_idx, closest_idx);
     }
     
-    ROS_INFO("All layers reordered successfully");
+    ROS_INFO("All %zu layers reordered successfully", path_layers_.size());
 }
 
 // 生成从当前位置到第一层的B样条接近轨迹

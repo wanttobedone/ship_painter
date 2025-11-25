@@ -5,7 +5,10 @@
     <arg name="traverse_clockwise" default="true"/><!--true顺时针，false逆时针-->
     
     <!-- WiFi连接参数 -->
-    <arg name="fcu_url" default="udp://:14550@192.168.4.1:14550"/>
+    <!-- <arg name="fcu_url" default="udp://:14550@192.168.4.1:14550"/> -->
+
+    <!-- 机载电脑连接参数 -->
+    <arg name="fcu_port" default="/dev/ttyACM0"/>
     
     <!--启动MAVROS-->
     <include file="$(find mavros)/launch/px4.launch">
@@ -87,7 +90,7 @@
         <param name="target_distance" value="0.6" type="double"/>
         
         <!-- PID参数（从保守值开始） -->
-        <param name="distance_kp" value="0.5" type="double"/>
+        <param name="distance_kp" value="0.8" type="double"/>
         <param name="distance_ki" value="0.0" type="double"/>
         <param name="distance_kd" value="0.0" type="double"/>
         

@@ -141,12 +141,41 @@ std::vector<PathPlanner::PathLayer> PathPlanner::generateSprayPath(const Eigen::
             layer.is_closed = true;
             layers.push_back(layer);
             
-            ROS_INFO("Generated layer %zu at z=%.3f with %zu waypoints",
-                     layers.size(), z_center, waypoints.size());
+            // ROS_INFO("Generated layer %zu at z=%.3f with %zu waypoints",
+            //          layers.size(), z_center, waypoints.size());
         }
     }
     
-    ROS_INFO("Successfully generated %zu spray layers", layers.size());
+    //轮廓提取路径规划汇总信息
+    ROS_INFO("PATH PLANNING SUMMARY:");
+    ROS_INFO("Total Layers: %zu", layers.size());
+    ROS_INFO("----------------------------------------");
+    ROS_INFO(" Layer | Z(m)  | Waypts | X-Range(m) | Status");
+    ROS_INFO("-------|-------|--------|------------|--------");
+
+    for (size_t i = 0; i < layers.size(); ++i) {
+        const auto& layer = layers[i];
+        
+        // 计算X范围
+        double min_x = std::numeric_limits<double>::max();
+        double max_x = std::numeric_limits<double>::lowest();
+        for (const auto& wp : layer.waypoints) {
+            min_x = std::min(min_x, wp.position.x());
+            max_x = std::max(max_x, wp.position.x());
+        }
+        double x_width = max_x - min_x;
+        
+        ROS_INFO("   %2zu  | %.3f | %4zu   | [%.2f,%.2f] | OK", 
+                i+1, layer.z_center, layer.waypoints.size(), min_x, max_x);
+    }
+
+    ROS_INFO("----------------------------------------");
+    ROS_INFO("Alpha Shape: Enabled (alpha=%.2f)", config_.alpha_shape_value);
+    ROS_INFO("Clipper Offset: %.3f m (precision=%.1f)", 
+            config_.spray_distance, config_.clipper_offset_precision);
+    ROS_INFO("Resampling: %.3f m spacing", config_.resample_spacing);
+    ROS_INFO("SUMMARY Finshed");
+
     return layers;
 }
 
@@ -174,7 +203,7 @@ std::vector<PathPlanner::Waypoint> PathPlanner::generateLayerPath(pcl::PointClou
         return waypoints;
     }
     
-    ROS_INFO(" Extracted %zu original contour points", original_contour.size());
+    // ROS_INFO(" Extracted %zu original contour points", original_contour.size());
     
     // 分析原始轮廓的尺寸
     double min_x = std::numeric_limits<double>::max();
@@ -196,7 +225,7 @@ std::vector<PathPlanner::Waypoint> PathPlanner::generateLayerPath(pcl::PointClou
     // ROS_INFO("Center: (%.3f, %.3f)", (min_x + max_x) / 2, (min_y + max_y) / 2);
 
     // 2. 使用Clipper进行轮廓偏移
-    ROS_INFO("Performing Clipper offset of %.3f m ...", config_.spray_distance);
+    // ROS_INFO("Performing Clipper offset of %.3f m ...", config_.spray_distance);
 
     std::vector<Eigen::Vector3d> spray_positions = offsetContourWithClipper(
         original_contour,
@@ -210,8 +239,8 @@ std::vector<PathPlanner::Waypoint> PathPlanner::generateLayerPath(pcl::PointClou
         return waypoints;
     }
 
-    ROS_INFO("Clipper offset successful: %zu -> %zu points",
-            original_contour.size(), spray_positions.size());
+    // ROS_INFO("Clipper offset successful: %zu -> %zu points",
+    //         original_contour.size(), spray_positions.size());
 
     
     // *** 保存偏移后的轮廓用于调试可视化 ***
@@ -228,7 +257,7 @@ std::vector<PathPlanner::Waypoint> PathPlanner::generateLayerPath(pcl::PointClou
     waypoints = optimizeWaypointDistribution(waypoints);
     computeOrientations(waypoints);
 
-    ROS_INFO("CLIPPER result: %zu waypoints for layer at z=%.3f", waypoints.size(), z_center);
+    // ROS_INFO("CLIPPER result: %zu waypoints for layer at z=%.3f", waypoints.size(), z_center);
     
     if (config_.enable_normal_smoothing) {
         waypoints = optimizeWaypointDistribution(waypoints);
@@ -253,8 +282,8 @@ std::vector<Eigen::Vector3d> PathPlanner::extractAlphaShapeContour(pcl::PointClo
     typedef CGAL::Delaunay_triangulation_2<K,Tds> Triangulation_2;
     typedef CGAL::Alpha_shape_2<Triangulation_2> Alpha_shape_2;
     
-    ROS_INFO("CGAL Alpha Shape processing %zu points at z=%.3f with alpha=%.3f", 
-             layer_cloud->size(), z_center, alpha);
+    // ROS_INFO("CGAL Alpha Shape processing %zu points at z=%.3f with alpha=%.3f", 
+    //          layer_cloud->size(), z_center, alpha);
     
     // 1. 将点云投影到2D平面
     std::vector<Point_2> points_2d;
@@ -335,7 +364,7 @@ std::vector<Eigen::Vector3d> PathPlanner::extractAlphaShapeContour(pcl::PointClo
         } while (current != start && visited.size() < boundary_vertices.size());
     }
     
-    ROS_INFO("CGAL Alpha Shape extracted %zu contour points", contour.size());
+    // ROS_INFO("CGAL Alpha Shape extracted %zu contour points", contour.size());
     // 保存原始轮廓用于可视化
     alphashape_contours_.push_back({z_center, contour});
 
@@ -349,8 +378,8 @@ std::vector<Eigen::Vector3d> PathPlanner::extractAlphaShapeContour(pcl::PointClo
             max_x_contour = std::max(max_x_contour, pt.x());
         }
         
-        ROS_INFO("  Alpha Shape contour: %zu points; Contour X range: [%.3f, %.3f] (width: %.3f)", 
-                    contour.size(), min_x_contour, max_x_contour, max_x_contour - min_x_contour);
+        // ROS_INFO("  Alpha Shape contour: %zu points; Contour X range: [%.3f, %.3f] (width: %.3f)", 
+        //             contour.size(), min_x_contour, max_x_contour, max_x_contour - min_x_contour);
     }
     
     return contour;
@@ -1039,8 +1068,8 @@ std::vector<Eigen::Vector3d> PathPlanner::offsetContourWithClipper(
             (is_clockwise ? -offset_distance : offset_distance) * config_.clipper_offset_precision;
 
         // 3. 直接执行单次偏移
-        ROS_INFO("Performing single-step Clipper offset: %.3fm (%s)",
-                 offset_distance, is_clockwise ? "CW" : "CCW");
+        // ROS_INFO("Performing single-step Clipper offset: %.3fm (%s)",
+        //          offset_distance, is_clockwise ? "CW" : "CCW");
 
         Clipper2Lib::PathsD result_paths = Clipper2Lib::InflatePaths(
             subject_paths,
@@ -1068,8 +1097,8 @@ std::vector<Eigen::Vector3d> PathPlanner::offsetContourWithClipper(
         std::vector<Eigen::Vector3d> offset_contour =
             convertFromClipperPaths({result_paths[largest_idx]}, z_center);
 
-        ROS_INFO("Clipper offset success: %zu -> %zu points",
-                 original_contour.size(), offset_contour.size());
+        // ROS_INFO("Clipper offset success: %zu -> %zu points",
+        //          original_contour.size(), offset_contour.size());
 
         double signed_area = 0.0;
         for (size_t i = 0; i < offset_contour.size(); ++i) {
@@ -1132,7 +1161,7 @@ Clipper2Lib::PathsD PathPlanner::convertToClipperPaths(const std::vector<Eigen::
         path = temp_points;
         paths.push_back(path);
         
-        ROS_INFO("Clean contour: %zu -> %zu points", contour.size(), path.size());
+        // ROS_INFO("Clean contour: %zu -> %zu points", contour.size(), path.size());
     } else {
         ROS_ERROR("Contour cleaning resulted in insufficient points: %zu", temp_points.size());
     }
@@ -1251,7 +1280,7 @@ std::vector<Eigen::Vector3d> PathPlanner::recomputeNormalsForOffsetContour(
             smoothed_normals.push_back(smoothed);
         }
         
-        ROS_INFO("Normals smoothed with window size %d", smooth_window);
+        // ROS_INFO("Normals smoothed with window size %d", smooth_window);
         return smoothed_normals;
     }
     

@@ -3,7 +3,7 @@
     <arg name="traverse_clockwise" default="true"/><!--true顺时针，false逆时针-->
 
     <!-- 启动路径规划节点 -->
-    <group ns="iris_0">
+    <!--group ns="iris_0"-->
         <node name="ship_painter_node" pkg="ship_painter" type="ship_painter_node" output="screen">
             <!--虚拟环境话题 暂时改了/iris_0-->
             <param name="mavros_ns" value="/mavros"/>
@@ -105,7 +105,7 @@
         <param name="debug_output" value="true" type="bool"/>
         
     </node>
-    </group>
+    <!--/group-->
     
     <!-- 启动 RViz 可视化 -->
     <node name="rviz" pkg="rviz" type="rviz" args="-d $(find ship_painter)/rviz/ship_painter.rviz"/>
