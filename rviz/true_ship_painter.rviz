@@ -53,6 +53,18 @@ Visualization Manager:
       Plane Cell Count: 20
       Reference Frame: map
       Value: true
+    # # 添加深度图像  带宽太大，用不了
+    # - Class: rviz/Image
+    #   Enabled: false
+    #   Image Topic: /camera/aligned_depth/compressedDepth/compressedDepth
+
+    #   Name: DepthImage
+    # # 添加RGB图像  
+    # - Class: rviz/Image
+    #   Enabled: false
+    #   Image Topic: /camera/color/compressed/compressed
+    #   Name: ColorImage
+    # 添加点云
     - Class: rviz/MarkerArray
       Enabled: false
       Marker Topic: /visualization/pointcloud

@@ -5,8 +5,8 @@
     <!-- 启动路径规划节点 -->
     <group ns="iris_0">
         <node name="ship_painter_node" pkg="ship_painter" type="ship_painter_node" output="screen">
-            <!--虚拟环境话题-->
-            <param name="mavros_ns" value="/iris_0/mavros"/>
+            <!--虚拟环境话题 暂时改了/iris_0-->
+            <param name="mavros_ns" value="/mavros"/>
             <!-- STL模型路径 -->
             <param name="model_path" value="$(find ship_painter)/models/model4cube.stl"/>
 
