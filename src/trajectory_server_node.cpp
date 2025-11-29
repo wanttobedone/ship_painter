@@ -10,6 +10,11 @@
 #include <geometry_msgs/PoseStamped.h>  // 用于获取姿态
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Matrix3x3.h>
+#include <sensor_msgs/CameraInfo.h>
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+#include <pcl/sample_consensus/ransac.h>
+#include <pcl/sample_consensus/sac_model_plane.h>
 
 
 class TrajectoryServer {
@@ -36,13 +41,43 @@ private:
     ros::Subscriber pose_sub_;
     
     struct DepthState {
-        float distance;
-        bool valid;
-        ros::Time last_update;
-        float last_distance;
-        
-        DepthState() : distance(0.0), valid(false), last_distance(0.0) {}
+    float distance;           // 到平面的垂直距离
+    Eigen::Vector3d wall_normal_camera;  // 墙面法向量（相机坐标系）
+    Eigen::Vector3d wall_normal_world;   // 墙面法向量（世界坐标系）
+    bool valid;
+    ros::Time last_update;
+    float last_distance;
+    int consecutive_failures;  // 连续失败计数
+    
+    DepthState() : distance(0.0), valid(false), last_distance(0.0), 
+                   consecutive_failures(0),
+                   wall_normal_camera(1, 0, 0),
+                   wall_normal_world(1, 0, 0) {}
     } depth_state_;
+
+    // ===== 投影驱动相关 =====
+    double current_spline_param_;      // 当前在B样条上的参数
+    bool first_projection_done_;       // 是否完成了首次全局投影
+    double last_valid_param_;          // 上一次有效的参数值
+
+    // ===== 导纳控制相关 =====
+    Eigen::Vector3d accumulated_offset_;  // 累积的GPS漂移补偿（世界坐标系）
+    double integral_error_;               // 积分误差（用于I项）
+
+    // ===== 相机内参 =====
+    double fx_, fy_, cx_, cy_;         // 相机内参
+    bool camera_info_received_;
+    ros::Subscriber camera_info_sub_;
+
+    // ===== 新增控制参数 =====
+    double offset_max_;                // offset累积上限 (米)
+    double offset_leak_rate_;          // offset泄露率 (每秒衰减比例)
+    double search_window_;             // 投影搜索窗口 (秒)
+    double lookahead_time_;            // 前瞻时间 (秒)
+    double max_backward_tolerance_;    // 最大允许回退量 (秒)
+    int ransac_max_iterations_;        // RANSAC最大迭代次数
+    double ransac_distance_threshold_; // RANSAC距离阈值 (米)
+    int min_inliers_;                  // 最小内点数
     
     geometry_msgs::PoseStamped current_pose_;
     bool pose_received_;
@@ -71,10 +106,27 @@ private:
     bool checkDepthValid();
     double getCurrentYaw();
     void loadParameters();
+
+    //相机内参回调函数声明
+    void cameraInfoCallback(const sensor_msgs::CameraInfo::ConstPtr& msg);
+    double findNearestParam(const ship_painter::BSpline& traj, 
+                            const Eigen::Vector3d& current_pos,
+                            double hint_param);
+    bool fitPlaneRANSAC(const cv::Mat& depth_image, 
+                        float& distance_out, 
+                        Eigen::Vector3d& normal_out);
 };
 
 // 构造函数实现移到类外(在第139行 bsplineCallback 之前)
-TrajectoryServer::TrajectoryServer() : nh_("~"), pose_received_(false) {
+TrajectoryServer::TrajectoryServer() : nh_("~"), 
+    pose_received_(false),
+    current_spline_param_(0.0),
+    first_projection_done_(false),
+    last_valid_param_(0.0),
+    accumulated_offset_(Eigen::Vector3d::Zero()),
+    integral_error_(0.0),
+    camera_info_received_(false)
+    {
     // 获取mavros命名空间参数
     std::string mavros_ns;
     nh_.param<std::string>("mavros_ns", mavros_ns, "/mavros");

@@ -42,6 +42,7 @@ find_package(PCL 1.8 REQUIRED COMPONENTS
   surface
   segmentation
   kdtree
+  sample_consensus
 )
 
 # 添加消息依赖
