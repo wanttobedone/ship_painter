@@ -300,3 +300,11 @@ target_link_libraries(depth_test_node
   ${catkin_LIBRARIES} 
   ${OpenCV_LIBRARIES}
   )
+
+  # 添加 hover_test_node 可执行文件
+add_executable(hover_test_node src/hover_test_node.cpp)
+
+# 链接库
+target_link_libraries(hover_test_node
+  ${catkin_LIBRARIES}
+)

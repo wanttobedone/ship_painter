@@ -24,6 +24,15 @@ Panels:
       - /Current View1
     Name: Views
     Splitter Ratio: 0.5
+#发布无人机实际轨迹
+  - Class: rviz/Marker
+    Enabled: true
+    Marker Topic: /visualization/actual_trajectory
+    Name: Actual Trajectory
+    Namespaces:
+      actual_trajectory: true
+    Queue Size: 100
+    Value: true
   - Class: rviz/Time
     Name: Time
     SyncMode: 0

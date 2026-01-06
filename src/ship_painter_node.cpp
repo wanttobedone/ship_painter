@@ -1704,6 +1704,7 @@ void ShipPainterNode::generateApproachTrajectory() {
         flight_state_.current_pose.pose.position.y,
         flight_state_.current_pose.pose.position.z
     );
+
     
     // 获取第一层的第一个控制点
     const auto& first_layer = bspline_layers_[0];

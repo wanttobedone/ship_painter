@@ -20,8 +20,8 @@
     <arg name="Y" default="0"/>
     
     <!-- 船体模型位置参数 -->
-    <arg name="ship_x" default="0"/>
-    <arg name="ship_y" default="5"/>
+    <arg name="ship_x" default="3.5"/>
+    <arg name="ship_y" default="0"/>
     <arg name="ship_z" default="0.25"/>
     
    

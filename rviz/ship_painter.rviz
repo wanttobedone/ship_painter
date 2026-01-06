@@ -61,6 +61,15 @@ Visualization Manager:
         {}
       Queue Size: 100
       Value: false
+      #发布无人机实际轨迹
+    - Class: rviz/Marker
+      Enabled: true
+      Marker Topic: /visualization/actual_trajectory
+      Name: Actual Trajectory
+      Namespaces:
+        actual_trajectory: true
+      Queue Size: 100
+      Value: true
     - Class: rviz/MarkerArray
       Enabled: false
       Marker Topic: /visualization/pointcloud
@@ -123,7 +132,7 @@ Visualization Manager:
       Shaft Length: 1
       Shaft Radius: 0.05000000074505806
       Shape: Arrow
-      Topic: /iris_0/mavros/local_position/pose
+      Topic: /mavros/local_position/pose
       Unreliable: false
       Value: true
     - Alpha: 1
@@ -147,7 +156,7 @@ Visualization Manager:
       Radius: 0.029999999329447746
       Shaft Diameter: 0.10000000149011612
       Shaft Length: 0.10000000149011612
-      Topic: /iris_0/mavros/local_position/pose
+      Topic: /mavros/local_position/pose
       Unreliable: false
       Value: false
     - Class: rviz/TF

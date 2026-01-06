@@ -78,6 +78,11 @@ private:
     int ransac_max_iterations_;        // RANSAC最大迭代次数
     double ransac_distance_threshold_; // RANSAC距离阈值 (米)
     int min_inliers_;                  // 最小内点数
+
+    //实际轨迹可视化 
+    ros::Publisher actual_trajectory_vis_pub_;
+    std::vector<geometry_msgs::Point> actual_trajectory_points_;
+    size_t max_trajectory_points_;  // 最大保存点数，防止内存无限增长
     
     geometry_msgs::PoseStamped current_pose_;
     bool pose_received_;
@@ -117,7 +122,7 @@ private:
                         Eigen::Vector3d& normal_out);
 };
 
-// 构造函数实现移到类外(在第139行 bsplineCallback 之前)
+// 构造函数实现移到类外
 TrajectoryServer::TrajectoryServer() : nh_("~"), 
     pose_received_(false),
     current_spline_param_(0.0),
@@ -141,6 +146,10 @@ TrajectoryServer::TrajectoryServer() : nh_("~"),
 
     trajectory_vis_pub_ = nh_.advertise<visualization_msgs::Marker>(
         "/visualization/current_trajectory", 10);
+
+    actual_trajectory_vis_pub_ = nh_.advertise<visualization_msgs::Marker>(
+        "/visualization/actual_trajectory", 10);
+    max_trajectory_points_ = 50000;  // 最多保存10000个点
     
     ROS_INFO("Trajectory server publishing to: %s/setpoint_raw/local", mavros_ns.c_str());
         
@@ -257,7 +266,18 @@ void TrajectoryServer::controlLoop(const ros::TimerEvent& event) {
                          trajectory_active_, layers_.size());
         return;
     }
-    
+     //录实际轨迹点
+    if (pose_received_) {
+        geometry_msgs::Point current_point;
+        current_point.x = current_pose_.pose.position.x;
+        current_point.y = current_pose_.pose.position.y;
+        current_point.z = current_pose_.pose.position.z;
+        actual_trajectory_points_.push_back(current_point);
+        
+        if (actual_trajectory_points_.size() > max_trajectory_points_) {
+            actual_trajectory_points_.erase(actual_trajectory_points_.begin());
+        }
+    }
     // 计算当前时间
     double t = (ros::Time::now() - trajectory_start_time_).toSec();
     
@@ -431,6 +451,27 @@ void TrajectoryServer::controlLoop(const ros::TimerEvent& event) {
         }
         
         trajectory_vis_pub_.publish(marker);
+
+    // ===== 发布实际飞行轨迹（黄色）=====
+    if (!actual_trajectory_points_.empty()) {
+        visualization_msgs::Marker actual_traj_marker;
+        actual_traj_marker.header.frame_id = "map";
+        actual_traj_marker.header.stamp = ros::Time::now();
+        actual_traj_marker.ns = "actual_trajectory";
+        actual_traj_marker.id = 0;
+        actual_traj_marker.type = visualization_msgs::Marker::LINE_STRIP;
+        actual_traj_marker.action = visualization_msgs::Marker::ADD;
+        actual_traj_marker.scale.x = 0.03;  // 线宽3cm
+        
+        // 黄色，与规划轨迹（绿色）区分
+        actual_traj_marker.color.r = 1.0;
+        actual_traj_marker.color.g = 1.0;
+        actual_traj_marker.color.b = 0.0;
+        actual_traj_marker.color.a = 0.8;
+        
+        actual_traj_marker.points = actual_trajectory_points_;
+        actual_trajectory_vis_pub_.publish(actual_traj_marker);
+    }
         
         setpoint_pub_.publish(target);
     }

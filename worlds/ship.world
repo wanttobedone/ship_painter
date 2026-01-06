@@ -30,5 +30,25 @@
       <real_time_factor>1</real_time_factor>
       <real_time_update_rate>500</real_time_update_rate>
     </physics>
+
+ <!--<plugin name='wind_plugin' filename='libgazebo_wind_plugin.so'>
+  <frameId>base_link</frameId>
+  <robotNamespace/>
+
+  <windDirectionMean>0 1 0</windDirectionMean>
+
+  <windVelocityMean>0.0</windVelocityMean>
+
+  <windGustVelocityMax>25.0</windGustVelocityMax>
+
+  <windGustStart>50.0</windGustStart>
+
+  <windGustDuration>10.0</windGustDuration>
+
+  <windGustDirectionMean>0 1 0</windGustDirectionMean>
+  
+  <windPubTopic>world_wind</windPubTopic>
+</plugin>-->
+
   </world>
 </sdf>
