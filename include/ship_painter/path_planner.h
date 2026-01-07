@@ -66,6 +66,30 @@ public:
         const std::vector<PathLayer>& path_layers
     );
 
+    /**
+     * @brief 生成包含接近段、所有作业层、层间过渡的全局唯一B样条轨迹
+     *
+     * 核心思想：不再让Trajectory Server处理层与层的切换，而是在Path Planner阶段
+     * 就将"接近段 + 所有作业层 + 层间过渡"拼接成唯一的一条长B样条轨迹。
+     * 这样物理上保证全程C²连续（位置、速度、加速度连续），彻底根除层切换过冲问题。
+     *
+     * 工程级增强特性：
+     * 1. 零速度约束：起点和终点通过重复控制点实现v=0, a=0
+     * 2. 层内闭合平滑：使用重叠延伸法（闭合后继续走P1、P2）避免尖角
+     * 3. 球面插值（SLERP）：法向量插值保证姿态角速度均匀
+     * 4. 多点过渡：层间插入3-5个过渡点，根据距离动态调整
+     *
+     * @param start_pos 无人机当前位置（世界坐标系）
+     * @param start_yaw 无人机当前偏航角（弧度）
+     * @param layers 已经生成的路径层航点（按飞行顺序排列）
+     * @return 合并后的单一B样条对象（closed=false的长轨迹）
+     */
+    ship_painter::BSpline generateGlobalBSpline(
+        const Eigen::Vector3d& start_pos,
+        double start_yaw,
+        const std::vector<PathLayer>& layers
+    );
+
     // 点云可视化
     pcl::PointCloud<pcl::PointNormal>::Ptr getProcessedCloud() const;
     pcl::PointCloud<pcl::PointNormal>::Ptr getOriginalCloud() const;

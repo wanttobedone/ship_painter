@@ -1420,9 +1420,272 @@ std::vector<PathPlanner::BSplineLayer> PathPlanner::generateBSplineLayersFromPat
         
         bspline_layers.push_back(bspline_layer);
         
-        ROS_INFO("Layer %zu: B-spline with %.2f seconds (from transformed waypoints)", 
+        ROS_INFO("Layer %zu: B-spline with %.2f seconds (from transformed waypoints)",
                  i, bspline_layer.trajectory.getTotalTime());
     }
-    
+
     return bspline_layers;
+}
+
+// ============================================================================
+// 全局轨迹生成辅助函数
+// ============================================================================
+
+namespace {
+/**
+ * @brief 球面线性插值（SLERP）用于法向量平滑过渡
+ *
+ * 为什么需要SLERP？
+ * - 线性插值 + 归一化会导致角速度不均匀
+ * - SLERP保证法向量在单位球面上以恒定角速度旋转
+ * - 对于大角度变化（如90度转向），SLERP能保证平滑姿态过渡
+ *
+ * 数学原理：
+ *   slerp(v1, v2, t) = [sin((1-t)θ)·v1 + sin(tθ)·v2] / sin(θ)
+ *   其中 θ = arccos(v1·v2) 是两向量夹角
+ *
+ * @param n1 起始法向量（必须归一化）
+ * @param n2 目标法向量（必须归一化）
+ * @param t 插值参数 [0,1]，0返回n1，1返回n2
+ * @return 插值后的法向量（已归一化）
+ */
+Eigen::Vector3d slerpNormal(const Eigen::Vector3d& n1, const Eigen::Vector3d& n2, double t) {
+    // 1. 确保输入归一化（防御性编程）
+    Eigen::Vector3d v1 = n1.normalized();
+    Eigen::Vector3d v2 = n2.normalized();
+
+    // 2. 计算夹角余弦值
+    double dot = v1.dot(v2);
+
+    // 3. 钳制dot值，防止数值误差导致acos越界（acos定义域[-1,1]）
+    dot = std::max(-1.0, std::min(1.0, dot));
+
+    // 4. 如果方向几乎相同（夹角<1度），直接线性插值避免除零
+    //    cos(1°) ≈ 0.9998，这里用0.9995作为阈值
+    if (dot > 0.9995) {
+        return (v1 * (1.0 - t) + v2 * t).normalized();
+    }
+
+    // 5. 计算夹角θ和sin(θ)
+    double theta = std::acos(dot);      // θ = arccos(v1·v2)
+    double sin_theta = std::sin(theta); // sin(θ)
+
+    // 6. SLERP公式：[sin((1-t)θ)·v1 + sin(tθ)·v2] / sin(θ)
+    double w1 = std::sin((1.0 - t) * theta) / sin_theta;
+    double w2 = std::sin(t * theta) / sin_theta;
+
+    return (v1 * w1 + v2 * w2).normalized();
+}
+} // anonymous namespace
+
+// ============================================================================
+// 全局B样条轨迹生成（核心实现）
+// ============================================================================
+
+ship_painter::BSpline PathPlanner::generateGlobalBSpline(
+    const Eigen::Vector3d& start_pos,
+    double start_yaw,
+    const std::vector<PathLayer>& layers) {
+
+    ship_painter::BSpline global_traj;
+
+    // ===== 输入验证 =====
+    if (layers.empty()) {
+        ROS_ERROR("[GlobalBSpline] No layers to merge!");
+        return global_traj;
+    }
+
+    ROS_INFO("========================================");
+    ROS_INFO("[GlobalBSpline] Starting global trajectory generation");
+    ROS_INFO("[GlobalBSpline] Input: %zu layers, start pos=(%.2f, %.2f, %.2f), yaw=%.2f°",
+             layers.size(), start_pos.x(), start_pos.y(), start_pos.z(), start_yaw * 180.0 / M_PI);
+
+    std::vector<Eigen::Vector3d> merged_points;
+    std::vector<Eigen::Vector3d> merged_normals;
+
+    // =========================================================================
+    // 阶段1: 接近段（Approach Segment）
+    // 目标：将无人机从当前悬停状态平滑引导至第一层的作业姿态
+    // =========================================================================
+
+    // 1.1 计算起始法向量（根据当前Yaw反推）
+    //     约定：喷涂方向 = -法向量，即 spray_dir = -n
+    //     因此：n = -(cos(yaw), sin(yaw), 0)
+    Eigen::Vector3d start_normal(-cos(start_yaw), -sin(start_yaw), 0.0);
+    start_normal.normalize();
+
+    // 1.2 获取第一层起点位置和法向量
+    if (layers[0].waypoints.empty()) {
+        ROS_ERROR("[GlobalBSpline] Layer 0 has no waypoints!");
+        return global_traj;
+    }
+    const auto& l0_start_wp = layers[0].waypoints[0];
+    Eigen::Vector3d target_pos = l0_start_wp.position;
+    Eigen::Vector3d target_normal = l0_start_wp.surface_normal.normalized();
+
+    double approach_distance = (target_pos - start_pos).norm();
+    ROS_INFO("[GlobalBSpline] Approach segment: distance=%.2fm", approach_distance);
+
+    // 1.3 【工程增强1】零速度约束：起点位置重复3次
+    //     原理：对于3次B样条，重复度=3时，该点的一阶导数（速度）和二阶导数（加速度）为0
+    //     效果：无人机从静止状态起飞，无突变
+    for (int k = 0; k < 3; ++k) {
+        merged_points.push_back(start_pos);
+        merged_normals.push_back(start_normal);
+    }
+    ROS_INFO("[GlobalBSpline] Added 3 repeated start points for zero-velocity constraint");
+
+    // 1.4 插入接近段引导点（线性插值 + SLERP法向量）
+    //     插入2个中间点（1/3和2/3处），引导B样条平滑过渡
+    int num_approach_guides = 2;
+    for (int k = 1; k <= num_approach_guides; ++k) {
+        double ratio = k / (num_approach_guides + 1.0); // 0.33, 0.66
+        Eigen::Vector3d guide_pos = start_pos + (target_pos - start_pos) * ratio;
+        Eigen::Vector3d guide_normal = slerpNormal(start_normal, target_normal, ratio);
+
+        merged_points.push_back(guide_pos);
+        merged_normals.push_back(guide_normal);
+    }
+    ROS_INFO("[GlobalBSpline] Added %d approach guide points", num_approach_guides);
+
+    // =========================================================================
+    // 阶段2: 遍历所有作业层（Working Layers）
+    // 关键特性：
+    //   - 层内闭合：使用"重叠延伸法"避免尖角
+    //   - 层间过渡：插入多个过渡点实现平滑上升
+    // =========================================================================
+
+    for (size_t i = 0; i < layers.size(); ++i) {
+        const auto& layer = layers[i];
+        if (layer.waypoints.empty()) {
+            ROS_WARN("[GlobalBSpline] Layer %zu is empty, skipping", i);
+            continue;
+        }
+
+        size_t num_waypoints = layer.waypoints.size();
+        ROS_INFO("[GlobalBSpline] Processing Layer %zu: %zu waypoints, z=%.2fm",
+                 i, num_waypoints, layer.z_center);
+
+        // ---------------------------------------------------------------------
+        // 2.1 添加当前层的所有航点
+        // ---------------------------------------------------------------------
+        for (const auto& wp : layer.waypoints) {
+            merged_points.push_back(wp.position);
+            merged_normals.push_back(wp.surface_normal.normalized());
+        }
+
+        // ---------------------------------------------------------------------
+        // 2.2 【工程增强2】层内闭合的重叠延伸法
+        // 问题：如果只是简单地将起点P0加到末尾，B样条在P0处可能出现切线突变（尖角）
+        // 解决：闭合后继续走2个点（P1, P2），让B样条有足够的"引导长度"
+        //       这样在P0处的曲率完全平滑，无尖角
+        //
+        // 示意：... → P_last → P0（闭合点）→ P1 → P2 → (开始过渡)
+        // ---------------------------------------------------------------------
+        int overlap_count = std::min(2, (int)num_waypoints - 1); // 至少有1个点才能overlap
+        for (int k = 0; k <= overlap_count; ++k) {
+            const auto& overlap_wp = layer.waypoints[k % num_waypoints];
+            merged_points.push_back(overlap_wp.position);
+            merged_normals.push_back(overlap_wp.surface_normal.normalized());
+        }
+        ROS_INFO("[GlobalBSpline]   - Layer %zu closed with %d overlap points", i, overlap_count + 1);
+
+        // ---------------------------------------------------------------------
+        // 2.3 层间过渡（Inter-layer Transition）
+        // 仅当不是最后一层时才生成过渡段
+        // ---------------------------------------------------------------------
+        if (i < layers.size() - 1) {
+            // 当前层结束点：由于使用了重叠延伸，实际结束在P2位置
+            Eigen::Vector3d p_curr_end = merged_points.back();
+            Eigen::Vector3d n_curr_end = merged_normals.back();
+
+            // 下一层起点
+            const auto& next_layer = layers[i + 1];
+            if (next_layer.waypoints.empty()) {
+                ROS_WARN("[GlobalBSpline] Next layer %zu is empty, skipping transition", i + 1);
+                continue;
+            }
+
+            Eigen::Vector3d p_next_start = next_layer.waypoints[0].position;
+            Eigen::Vector3d n_next_start = next_layer.waypoints[0].surface_normal.normalized();
+
+            double transition_distance = (p_next_start - p_curr_end).norm();
+
+            // 【工程增强4】动态过渡点数量：根据距离自适应
+            //   - 基础：每0.3米一个点
+            //   - 最少3个点（保证平滑）
+            //   - 最多8个点（避免过度密集）
+            int num_transition_pts = std::max(3, std::min(8, (int)(transition_distance / 0.3)));
+
+            ROS_INFO("[GlobalBSpline]   - Transition %zu→%zu: distance=%.2fm, points=%d",
+                     i, i + 1, transition_distance, num_transition_pts);
+
+            // 插入过渡点（均匀分布 + SLERP法向量）
+            for (int k = 1; k <= num_transition_pts; ++k) {
+                double ratio = k / (num_transition_pts + 1.0);
+
+                // 【工程增强3】位置线性插值 + 法向量球面插值
+                Eigen::Vector3d p_mid = p_curr_end + (p_next_start - p_curr_end) * ratio;
+                Eigen::Vector3d n_mid = slerpNormal(n_curr_end, n_next_start, ratio);
+
+                merged_points.push_back(p_mid);
+                merged_normals.push_back(n_mid);
+            }
+        }
+    }
+
+    // =========================================================================
+    // 阶段3: 终点零速度约束
+    // 目标：任务结束后无人机悬停，速度和加速度为0
+    // =========================================================================
+
+    if (!merged_points.empty()) {
+        Eigen::Vector3d final_pos = merged_points.back();
+        Eigen::Vector3d final_norm = merged_normals.back();
+
+        // 重复终点3次（与起点对称）
+        for (int k = 0; k < 3; ++k) {
+            merged_points.push_back(final_pos);
+            merged_normals.push_back(final_norm);
+        }
+        ROS_INFO("[GlobalBSpline] Added 3 repeated end points for zero-velocity constraint");
+    }
+
+    // =========================================================================
+    // 阶段4: 全局B样条拟合
+    // 关键参数：closed = false（这是从起点到终点的开放曲线）
+    // =========================================================================
+
+    size_t total_control_points = merged_points.size();
+    ROS_INFO("[GlobalBSpline] Total control points: %zu", total_control_points);
+
+    if (total_control_points < 4) {
+        ROS_ERROR("[GlobalBSpline] Too few control points (%zu < 4), cannot fit B-spline",
+                  total_control_points);
+        return global_traj;
+    }
+
+    // 拟合全局B样条（不闭合）
+    global_traj.fitFromContour(
+        merged_points,
+        merged_normals,
+        config_.flight_speed,  // 使用统一的飞行速度
+        false                  // ⚠️ 关键：不闭合
+    );
+
+    double total_time = global_traj.getTotalTime();
+    double total_length = 0.0;
+    for (size_t i = 1; i < merged_points.size(); ++i) {
+        total_length += (merged_points[i] - merged_points[i-1]).norm();
+    }
+
+    ROS_INFO("========================================");
+    ROS_INFO("[GlobalBSpline] ✓ Global trajectory generated successfully!");
+    ROS_INFO("[GlobalBSpline]   - Control points: %zu", total_control_points);
+    ROS_INFO("[GlobalBSpline]   - Total length: %.2f m", total_length);
+    ROS_INFO("[GlobalBSpline]   - Total time: %.2f s", total_time);
+    ROS_INFO("[GlobalBSpline]   - Average speed: %.2f m/s", total_length / total_time);
+    ROS_INFO("========================================");
+
+    return global_traj;
 }

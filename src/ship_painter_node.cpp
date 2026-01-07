@@ -1231,20 +1231,8 @@ void ShipPainterNode::run() {
     }
     
        
-    // 8. 生成B样条轨迹
-    ROS_INFO("Generating B-spline trajectories...");
-    publishBSplineTrajectories();
-    
-    // 9. 生成接近轨迹
-    ROS_INFO("Generating approach trajectory...");
-    generateApproachTrajectory();
-    
-    if (!has_approach_trajectory_) {
-        ROS_ERROR("Failed to generate approach trajectory");
-        return;
-    }
-    
-    // 10. 等待2秒让无人机稳定（同时持续发送hold指令）
+    // 8. 等待2秒让无人机稳定（同时持续发送hold指令）
+    //    注意：先稳定再生成轨迹，确保起点位置准确
     ROS_INFO("Waiting for drone to stabilize...");
     ros::Time stabilize_start = ros::Time::now();
     double stabilize_duration = 2.0;
@@ -1272,77 +1260,111 @@ void ShipPainterNode::run() {
         rate.sleep();
     }
     ROS_INFO("Stabilization complete");
-    
-    // 11. 构建并发布完整的B样条轨迹消息（接近轨迹 + 正式轨迹）
-    ROS_INFO("Publishing complete trajectory to trajectory_server...");
+
+    // =========================================================================
+    // 9. 生成全局合并B样条轨迹
+    //    核心改进：将"接近段 + 所有作业层 + 层间过渡"合并为唯一的一条轨迹
+    //    彻底解决层切换时的速度/位置不连续问题
+    // =========================================================================
+
+    ROS_INFO("========================================");
+    ROS_INFO("Generating GLOBAL merged B-spline trajectory...");
+
+    // 9.1 获取当前无人机精确状态（作为轨迹起点）
+    Eigen::Vector3d current_pos(
+        flight_state_.current_pose.pose.position.x,
+        flight_state_.current_pose.pose.position.y,
+        flight_state_.current_pose.pose.position.z
+    );
+
+    // 9.2 提取当前偏航角（用于计算起始法向量）
+    tf2::Quaternion q(
+        flight_state_.current_pose.pose.orientation.x,
+        flight_state_.current_pose.pose.orientation.y,
+        flight_state_.current_pose.pose.orientation.z,
+        flight_state_.current_pose.pose.orientation.w
+    );
+    double roll, pitch, yaw;
+    tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
+
+    ROS_INFO("Global trajectory start: pos=(%.2f, %.2f, %.2f), yaw=%.1f°",
+             current_pos.x(), current_pos.y(), current_pos.z(), yaw * 180.0 / M_PI);
+
+    // 9.3 调用PathPlanner生成全局B样条
+    //     这个函数内部会完成：
+    //       - 接近段：零速度起步 + 平滑引导
+    //       - 作业层：重叠延伸闭合避免尖角
+    //       - 层间过渡：动态多点插值 + SLERP法向量
+    //       - 终点：零速度悬停
+    ship_painter::BSpline global_bspline = planner_.generateGlobalBSpline(
+        current_pos,
+        yaw,
+        path_layers_
+    );
+
+    // 9.4 验证生成结果
+    if (global_bspline.getControlPoints().empty()) {
+        ROS_ERROR("Failed to generate global trajectory! Control points empty.");
+        ROS_ERROR("Aborting mission for safety.");
+        return;
+    }
+
+    ROS_INFO("✓ Global trajectory generated successfully");
+    ROS_INFO("  Total time: %.2f seconds", global_bspline.getTotalTime());
+    ROS_INFO("  Control points: %zu", global_bspline.getControlPoints().size());
+
+    // 9.5 存储到bspline_layers_以便可视化（复用原有可视化逻辑）
+    //     虽然名字叫"layers"，但实际只存一个元素
+    bspline_layers_.clear();
+    PathPlanner::BSplineLayer global_layer_wrapper;
+    global_layer_wrapper.trajectory = global_bspline;
+    global_layer_wrapper.layer_index = 0;
+    global_layer_wrapper.z_height = 0.0; // 全局轨迹无单一高度
+    bspline_layers_.push_back(global_layer_wrapper);
+    bsplines_generated_ = true;
+
+    // =========================================================================
+    // 10. 发布全局轨迹到 trajectory_server
+    //     关键：msg.layers中只有一个元素（全局长轨迹）
+    // =========================================================================
+
+    ROS_INFO("Publishing global trajectory to trajectory_server...");
     ship_painter::BsplineLayer msg;
-    
-    // 11.1 第一层：接近轨迹
-    ship_painter::Bspline approach_msg;
-    approach_msg.order = approach_trajectory_.getDegree();
-    approach_msg.start_time = ros::Time::now() + ros::Duration(1.0);  // 1秒后开始
-    approach_msg.duration = approach_trajectory_.getTotalTime();
-    
-    // 控制点
-    for (const auto& pt : approach_trajectory_.getControlPoints()) {
+
+    // 构建ROS消息
+    ship_painter::Bspline bspline_msg;
+    bspline_msg.order = global_bspline.getDegree();
+    bspline_msg.start_time = ros::Time::now() + ros::Duration(1.0);  // 1秒后启动
+    bspline_msg.duration = global_bspline.getTotalTime();
+
+    // 填充控制点
+    for (const auto& pt : global_bspline.getControlPoints()) {
         geometry_msgs::Point p;
         p.x = pt.x();
         p.y = pt.y();
         p.z = pt.z();
-        approach_msg.pos_pts.push_back(p);
+        bspline_msg.pos_pts.push_back(p);
     }
-    
-    // 节点向量
-    approach_msg.knots = approach_trajectory_.getKnots();
-    
-    // 法向量
-    for (const auto& normal : approach_trajectory_.getNormals()) {
-        geometry_msgs::Vector3 n;
-        n.x = normal.x();
-        n.y = normal.y();
-        n.z = normal.z();
-        approach_msg.normals.push_back(n);
+
+    // 填充节点向量
+    bspline_msg.knots = global_bspline.getKnots();
+
+    // 填充法向量
+    for (const auto& n : global_bspline.getNormals()) {
+        geometry_msgs::Vector3 vn;
+        vn.x = n.x();
+        vn.y = n.y();
+        vn.z = n.z();
+        bspline_msg.normals.push_back(vn);
     }
-    
-    msg.layers.push_back(approach_msg);  // 添加接近轨迹作为第一层
-    
-    // 11.2 后续层：正式的喷涂轨迹
-    for (size_t i = 0; i < bspline_layers_.size(); i++) {
-        const auto& layer = bspline_layers_[i];
-        
-        ship_painter::Bspline bspline_msg;
-        bspline_msg.order = layer.trajectory.getDegree();
-        bspline_msg.start_time = ros::Time::now() + ros::Duration(2.0);  // 占位，实际由server控制
-        bspline_msg.duration = layer.trajectory.getTotalTime();
-        
-        // 控制点
-        for (const auto& pt : layer.trajectory.getControlPoints()) {
-            geometry_msgs::Point p;
-            p.x = pt.x();
-            p.y = pt.y();
-            p.z = pt.z();
-            bspline_msg.pos_pts.push_back(p);
-        }
-        
-        // 节点向量
-        bspline_msg.knots = layer.trajectory.getKnots();
-        
-        // 法向量
-        for (const auto& normal : layer.trajectory.getNormals()) {
-            geometry_msgs::Vector3 n;
-            n.x = normal.x();
-            n.y = normal.y();
-            n.z = normal.z();
-            bspline_msg.normals.push_back(n);
-        }
-        
-        msg.layers.push_back(bspline_msg);
-    }
-    
-    // 11.3 发布完整消息
+
+    msg.layers.push_back(bspline_msg);  // 只有一层！
+
+    // 发布
     bspline_pub_.publish(msg);
-    ROS_INFO("Published complete trajectory: 1 approach + %zu work layers = %zu total",
-             bspline_layers_.size(), msg.layers.size());
+    ROS_INFO("✓ Global trajectory published (1 unified trajectory, %zu control points)",
+             global_bspline.getControlPoints().size());
+    ROS_INFO("========================================");
     
     ROS_INFO("Maintaining setpoint stream, waiting for trajectory_server to take over...");
 
