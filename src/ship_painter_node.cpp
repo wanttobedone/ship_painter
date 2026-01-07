@@ -1704,7 +1704,22 @@ void ShipPainterNode::generateApproachTrajectory() {
         flight_state_.current_pose.pose.position.y,
         flight_state_.current_pose.pose.position.z
     );
+    
+    
+    //获取当前偏航角并计算起始法向量
+    tf2::Quaternion q(
+        flight_state_.current_pose.pose.orientation.x,
+        flight_state_.current_pose.pose.orientation.y,
+        flight_state_.current_pose.pose.orientation.z,
+        flight_state_.current_pose.pose.orientation.w
+    );
+    double roll, pitch, yaw;
+    tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
 
+    // 根据当前 Yaw 计算“虚拟”法向量
+    // 原理：yaw 是机头方向，法向量 n 应该是机头反方向 (-heading)
+    // 这样 TrajectoryServer 中的 spray_dir = -n 就会还原回 heading
+    Eigen::Vector3d start_normal(-cos(yaw), -sin(yaw), 0.0);
     
     // 获取第一层的第一个控制点
     const auto& first_layer = bspline_layers_[0];
@@ -1717,42 +1732,45 @@ void ShipPainterNode::generateApproachTrajectory() {
     
     Eigen::Vector3d target_pos = control_points[0];
     
-    ROS_INFO("Generating approach trajectory from [%.2f, %.2f, %.2f] to [%.2f, %.2f, %.2f]",
-             current_pos.x(), current_pos.y(), current_pos.z(),
-             target_pos.x(), target_pos.y(), target_pos.z());
+    // 获取第一层第一个点的法向量（终点法向量）
+    Eigen::Vector3d target_normal;
+    const auto& first_normals = first_layer.trajectory.getNormals();
+    if (!first_normals.empty()) {
+        target_normal = first_normals[0];
+    } else {
+        target_normal = Eigen::Vector3d(0, 0, -1);
+    }
+
+    ROS_INFO("Generating approach trajectory...");
     
-    // 创建起飞位置的临时层
-    PathPlanner::BSplineLayer takeoff_layer;
-    
-    // 3个控制点：起点 - 中点 - 终点（生成平滑过渡）
     std::vector<Eigen::Vector3d> transition_points;
     std::vector<Eigen::Vector3d> transition_normals;
     
-    // 起点：当前位置
+    // 1. 起点
     transition_points.push_back(current_pos);
-    transition_normals.push_back(Eigen::Vector3d(0, 0, -1));
+    transition_normals.push_back(start_normal); // 使用当前朝向对应的法向量
     
-    // 中点：插值位置
-    Eigen::Vector3d mid_pos = (current_pos + target_pos) * 0.5;
-    transition_points.push_back(mid_pos);
-    transition_normals.push_back(Eigen::Vector3d(0, 0, -1));
+    // 2. 中间点1 (1/3处)
+    transition_points.push_back(current_pos + (target_pos - current_pos) * 0.33);
+    // 法向量线性插值 (start -> target)
+    Eigen::Vector3d n1 = (start_normal * 0.66 + target_normal * 0.33).normalized();
+    transition_normals.push_back(n1);
+
+    // 3. 中间点2 (2/3处)
+    transition_points.push_back(current_pos + (target_pos - current_pos) * 0.66);
+    // 法向量线性插值
+    Eigen::Vector3d n2 = (start_normal * 0.33 + target_normal * 0.66).normalized();
+    transition_normals.push_back(n2);
     
-    // 终点：第一层第一个点
+    // 4. 终点
     transition_points.push_back(target_pos);
+    transition_normals.push_back(target_normal);
     
-    // 获取第一层第一个点的法向量
-    const auto& first_normals = first_layer.trajectory.getNormals();
-    if (!first_normals.empty()) {
-        transition_normals.push_back(first_normals[0]);
-    } else {
-        transition_normals.push_back(Eigen::Vector3d(0, 0, -1));
-    }
-    
-    // 拟合接近轨迹（不闭合）
+    // 拟合接近轨迹
     approach_trajectory_.fitFromContour(
         transition_points,
         transition_normals,
-        params_.flight_speed,  // 使用设定的飞行速度
+        params_.flight_speed, 
         false  // 不闭合
     );
     
