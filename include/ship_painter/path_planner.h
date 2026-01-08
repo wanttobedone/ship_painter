@@ -82,12 +82,14 @@ public:
      * @param start_pos 无人机当前位置（世界坐标系）
      * @param start_yaw 无人机当前偏航角（弧度）
      * @param layers 已经生成的路径层航点（按飞行顺序排列）
+     * @param out_layer_end_times 输出参数：每层结束时的全局时间戳（秒）
      * @return 合并后的单一B样条对象（closed=false的长轨迹）
      */
     ship_painter::BSpline generateGlobalBSpline(
         const Eigen::Vector3d& start_pos,
         double start_yaw,
-        const std::vector<PathLayer>& layers
+        const std::vector<PathLayer>& layers,
+        std::vector<double>& out_layer_end_times
     );
 
     // 点云可视化

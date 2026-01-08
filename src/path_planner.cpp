@@ -1475,7 +1475,8 @@ Eigen::Vector3d slerpNormal(const Eigen::Vector3d& n1, const Eigen::Vector3d& n2
 ship_painter::BSpline PathPlanner::generateGlobalBSpline(
     const Eigen::Vector3d& start_pos,
     double start_yaw,
-    const std::vector<PathLayer>& layers) {
+    const std::vector<PathLayer>& layers,
+    std::vector<double>& out_layer_end_times) {
 
     ship_painter::BSpline global_traj;
 
@@ -1493,10 +1494,11 @@ ship_painter::BSpline PathPlanner::generateGlobalBSpline(
     std::vector<Eigen::Vector3d> merged_points;
     std::vector<Eigen::Vector3d> merged_normals;
 
-    // =========================================================================
-    // 阶段1: 接近段（Approach Segment）
-    // 目标：将无人机从当前悬停状态平滑引导至第一层的作业姿态
-    // =========================================================================
+    // 用于记录每一层结束时的点索引
+    std::vector<size_t> layer_end_indices;
+
+    // 阶段1: 接近段
+    // 目标：将无人机从当前悬停状态平滑引导至第一层的作业姿态=
 
     // 1.1 计算起始法向量（根据当前Yaw反推）
     //     约定：喷涂方向 = -法向量，即 spray_dir = -n
@@ -1579,6 +1581,10 @@ ship_painter::BSpline PathPlanner::generateGlobalBSpline(
             merged_normals.push_back(overlap_wp.surface_normal.normalized());
         }
         ROS_INFO("[GlobalBSpline]   - Layer %zu closed with %d overlap points", i, overlap_count + 1);
+
+        // === 关键点：记录当前层结束时的点索引 ===
+        // 此时 merged_points 的大小就是这一层(含重叠)结束的位置
+        layer_end_indices.push_back(merged_points.size() - 1);
 
         // ---------------------------------------------------------------------
         // 2.3 层间过渡（Inter-layer Transition）
@@ -1668,6 +1674,30 @@ ship_painter::BSpline PathPlanner::generateGlobalBSpline(
     for (size_t i = 1; i < merged_points.size(); ++i) {
         total_length += (merged_points[i] - merged_points[i-1]).norm();
     }
+
+    // 计算每层结束的时间戳 
+    // 逻辑：计算累积弦长，通过 (当前弦长/总弦长)*总时间 映射出时间戳
+
+    std::vector<double> point_cumulative_len;
+    point_cumulative_len.reserve(merged_points.size());
+    point_cumulative_len.push_back(0.0);
+
+    double cumulative = 0.0;
+    for (size_t i = 1; i < merged_points.size(); ++i) {
+        cumulative += (merged_points[i] - merged_points[i-1]).norm();
+        point_cumulative_len.push_back(cumulative);
+    }
+
+    out_layer_end_times.clear();
+
+    for (size_t idx : layer_end_indices) {
+        if (idx < point_cumulative_len.size() && total_length > 1e-6) {
+            double t = (point_cumulative_len[idx] / total_length) * total_time;
+            out_layer_end_times.push_back(t);
+        }
+    }
+
+    ROS_INFO("[GlobalBSpline] Generated %zu layer time markers.", out_layer_end_times.size());
 
     ROS_INFO("========================================");
     ROS_INFO("[GlobalBSpline] ✓ Global trajectory generated successfully!");

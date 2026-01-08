@@ -31,10 +31,13 @@ private:
     
     std::vector<ship_painter::BSpline> layers_;
     std::vector<ship_painter::BSpline> transitions_;
-    
+
     size_t current_layer_idx_;
     bool trajectory_active_;
     ros::Time trajectory_start_time_;
+
+    // 层时间标记（用于分层进度显示）
+    std::vector<double> current_layer_end_times_;
 
     // 深度控制相关
     ros::Subscriber depth_sub_;
@@ -69,7 +72,7 @@ private:
     bool camera_info_received_;
     ros::Subscriber camera_info_sub_;
 
-    // ===== 新增控制参数 =====
+    // ===== 控制参数 =====
     double offset_max_;                // offset累积上限 (米)
     double offset_leak_rate_;          // offset泄露率 (每秒衰减比例)
     double search_window_;             // 投影搜索窗口 (秒)
@@ -193,39 +196,43 @@ TrajectoryServer::TrajectoryServer() : nh_("~"),
 
 void TrajectoryServer::bsplineCallback(
     const ship_painter::BsplineLayer::ConstPtr& msg) {
-    
+
     layers_.clear();
-    
+
     for (const auto& layer_msg : msg->layers) {
         ship_painter::BSpline bspline;
-        
+
         std::vector<Eigen::Vector3d> control_points;
         std::vector<Eigen::Vector3d> normals;
-        
+
         for (const auto& pt : layer_msg.pos_pts) {
             control_points.push_back(Eigen::Vector3d(pt.x, pt.y, pt.z));
         }
-        
+
         for (const auto& n : layer_msg.normals) {
             normals.push_back(Eigen::Vector3d(n.x, n.y, n.z));
         }
-        
+
         // 直接设置参数，不重新拟合
         bspline.setControlPoints(control_points);
         bspline.setKnots(layer_msg.knots);
         bspline.setNormals(normals);
         bspline.setDegree(layer_msg.order);
         bspline.setTotalTime(layer_msg.duration);
-        
+
         layers_.push_back(bspline);
     }
-    
+
+    // 保存层时间标记
+    current_layer_end_times_ = msg->layer_end_times;
+
     // 启动轨迹跟踪
     trajectory_active_ = true;
     trajectory_start_time_ = ros::Time::now();  //立即开始，不用消息中的start_time
     current_layer_idx_ = 0;
-    
-    ROS_INFO("Trajectory server: Loaded %zu layers", layers_.size());
+
+    ROS_INFO("Trajectory server: Loaded %zu layers with %zu time markers",
+             layers_.size(), current_layer_end_times_.size());
 
     if (!layers_.empty()) {
         const auto& first_traj = layers_[0];
@@ -421,11 +428,45 @@ void TrajectoryServer::controlLoop(const ros::TimerEvent& event) {
         
         setpoint_pub_.publish(target);
 
-        //打印当前状态
-        ROS_INFO_THROTTLE(1.0, "Layer %zu/%zu, t=%.2f/%.2f, pos=[%.2f, %.2f, %.2f]",
-                        current_layer_idx_ + 1, layers_.size(),
-                        t, current_traj.getTotalTime(),
-                        p.x(), p.y(), p.z());
+        // 分层进度显示逻辑 
+        if (!current_layer_end_times_.empty()) {
+            int current_layer_idx = 0; // 0-based index
+            double current_layer_end_t = current_layer_end_times_.back();
+
+            // 查找当前处于第几层
+            for (size_t i = 0; i < current_layer_end_times_.size(); ++i) {
+                if (t <= current_layer_end_times_[i]) {
+                    current_layer_idx = i;
+                    current_layer_end_t = current_layer_end_times_[i];
+                    break;
+                }
+            }
+
+            // 处理最后阶段 (如果 t 超过了最后一层的时间，通常是最后的悬停阶段)
+            if (t > current_layer_end_times_.back()) {
+                current_layer_idx = current_layer_end_times_.size() - 1;
+            }
+
+            // 计算时间
+            double total_duration = layers_[0].getTotalTime();
+            double time_left_layer = std::max(0.0, current_layer_end_t - t);
+            double time_left_total = std::max(0.0, total_duration - t);
+
+            // 格式化打印 (使用 THROTTLE 防止刷屏，1秒1次)
+            ROS_INFO_THROTTLE(1.0,
+                "[Progress] Layer: %d/%zu | Layer Left: %.1fs | Total Left: %.1fs | Global T: %.1f",
+                current_layer_idx + 1, // 显示为 1-based
+                current_layer_end_times_.size(),
+                time_left_layer,
+                time_left_total,
+                t);
+        } else {
+            // 回退：如果没有层时间标记，使用原有的简单打印
+            ROS_INFO_THROTTLE(1.0, "Layer %zu/%zu, t=%.2f/%.2f, pos=[%.2f, %.2f, %.2f]",
+                            current_layer_idx_ + 1, layers_.size(),
+                            t, current_traj.getTotalTime(),
+                            p.x(), p.y(), p.z());
+        }
 
         //发布可视化
         visualization_msgs::Marker marker;

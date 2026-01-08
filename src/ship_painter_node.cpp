@@ -1130,9 +1130,9 @@ void ShipPainterNode::run() {
         ros::spinOnce();
         
         if (flight_state_.pose_received) {
-            // 检查高度是否合理（应该接近0，允许±.5米的误差）
+            // 检查高度是否合理（应该接近0，允许±0.5米的误差）
             double current_height = flight_state_.current_pose.pose.position.z;
-            if (fabs(current_height) < 1.5) {
+            if (fabs(current_height) < 0.5) {
                 ekf_ready = true;
                 ROS_INFO("EKF2 initialized! Current position: (%.2f, %.2f, %.2f)", 
                         flight_state_.current_pose.pose.position.x,
@@ -1295,10 +1295,12 @@ void ShipPainterNode::run() {
     //       - 作业层：重叠延伸闭合避免尖角
     //       - 层间过渡：动态多点插值 + SLERP法向量
     //       - 终点：零速度悬停
+    std::vector<double> layer_times; // 新建变量接收层时间标记
     ship_painter::BSpline global_bspline = planner_.generateGlobalBSpline(
         current_pos,
         yaw,
-        path_layers_
+        path_layers_,
+        layer_times  // 传入变量
     );
 
     // 9.4 验证生成结果
@@ -1357,10 +1359,13 @@ void ShipPainterNode::run() {
 
     msg.layers.push_back(bspline_msg);  // 只有一层！
 
+    // 填充层时间标记
+    msg.layer_end_times = layer_times;
+
     // 发布
     bspline_pub_.publish(msg);
-    ROS_INFO("Global trajectory published (1 unified trajectory, %zu control points)",
-             global_bspline.getControlPoints().size());
+    ROS_INFO("Global trajectory published (1 unified trajectory, %zu control points, %zu layer markers)",
+             global_bspline.getControlPoints().size(), layer_times.size());
 
     
     ROS_INFO("Maintaining setpoint stream, waiting for trajectory_server to take over...");

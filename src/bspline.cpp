@@ -115,17 +115,37 @@ Eigen::Vector3d BSpline::getAcceleration(double t) const {
 }
 
 Eigen::Vector3d BSpline::getNormal(double t) const {
-    // 线性插值法向量
-    t = std::max(0.0, std::min(t, total_time_));
-    
-    double ratio = t / total_time_;
-    int idx = static_cast<int>(ratio * (normals_.size() - 1));
-    idx = std::max(0, std::min(idx, (int)normals_.size() - 2));
-    
-    double local_ratio = ratio * (normals_.size() - 1) - idx;
-    
-    return normals_[idx] * (1 - local_ratio) + 
-           normals_[idx + 1] * local_ratio;
+    // 1. 边界保护
+    if (t <= 0.0) return normals_.front().normalized();
+    if (t >= total_time_) return normals_.back().normalized();
+
+    // 2. 核心修复：使用De Boor算法对法向量进行插值
+    // 原理与 getPosition 完全一致，保证 P(t) 和 N(t) 严格同步
+    int span = findSpan(t);
+
+    // 初始化结果向量
+    Eigen::Vector3d result = Eigen::Vector3d::Zero();
+
+    // 遍历基函数支撑区间 (p+1个控制点)
+    for (int i = 0; i <= degree_; i++) {
+        int idx = span - degree_ + i;
+        if (idx >= 0 && idx < static_cast<int>(normals_.size())) {
+            // 计算基函数值 N_{i,p}(t)
+            double basis = deBoor(idx, degree_, t, knots_);
+            result += normals_[idx] * basis;
+        }
+    }
+
+    // 3. 归一化 (插值后的向量长度可能不为1)
+    if (result.norm() > 1e-6) {
+        result.normalize();
+    } else {
+        // 异常回退：如果插值结果为0，返回最近的控制点法向
+        int safe_idx = std::min((int)normals_.size()-1, std::max(0, span));
+        return normals_[safe_idx].normalized();
+    }
+
+    return result;
 }
 
 int BSpline::findSpan(double t) const {
