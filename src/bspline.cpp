@@ -1,6 +1,8 @@
 #include "ship_painter/bspline.h"
 #include <ros/ros.h>
 #include <cmath>
+#include <vector>
+#include <iostream>
 
 namespace ship_painter {
 
@@ -15,30 +17,29 @@ void BSpline::fitFromContour(
         return;
     }
     
-    // 1. 处理闭合：复制首点到末尾
     control_points_ = contour_points;
     normals_ = normals;
     
+    // 1. 处理闭合
     if (closed && contour_points.size() > 1) {
         control_points_.push_back(contour_points[0]);
         normals_.push_back(normals[0]);
     }
     
-    // 2. 计算轮廓总长度
+    // 2. 计算总长度
     double total_length = 0.0;
     for (size_t i = 1; i < control_points_.size(); i++) {
         total_length += (control_points_[i] - control_points_[i-1]).norm();
     }
     
-    // 3. 根据速度计算总时间
+    // 3. 计算总时间
+    if (cruise_speed < 1e-3) cruise_speed = 1.0; // 保护
     total_time_ = total_length / cruise_speed;
-    ROS_INFO("B-spline calculation: length=%.2f m, speed=%.2f m/s, time=%.2f s",
-         total_length, cruise_speed, total_time_); 
     
-    // 4. 生成弦长参数化节点向量
+    // 4. 生成节点向量
     generateChordLengthKnots(control_points_, total_time_);
     
-    ROS_INFO("B-spline fitted: %zu control points, %.2f seconds, %.2f meters",
+    ROS_INFO("B-spline fitted: %zu pts, time=%.2f s, len=%.2f m",
              control_points_.size(), total_time_, total_length);
 }
 
@@ -46,241 +47,204 @@ void BSpline::generateChordLengthKnots(
     const std::vector<Eigen::Vector3d>& points,
     double total_time) {
     
-    int n = points.size();  // 控制点数
-    int m = n + degree_ + 1;  // 节点向量长度
+    int n = points.size(); 
+    int m = n + degree_ + 1;
     
     knots_.clear();
     knots_.resize(m);
     
-    // 1. 前 degree_+1 个节点 = 0 (保证起点插值)
-    for (int i = 0; i <= degree_; i++) {
-        knots_[i] = 0.0;
-    }
+    // 起点重复节点
+    for (int i = 0; i <= degree_; i++) knots_[i] = 0.0;
     
-    // 2. 后 degree_+1 个节点 = total_time (保证终点插值)
-    for (int i = m - degree_ - 1; i < m; i++) {
-        knots_[i] = total_time;
-    }
-    
-    // 3. 中间节点：弦长参数化
+    // 弦长累加
     std::vector<double> cumulative_length(n, 0.0);
+    double current_len = 0.0;
     for (int i = 1; i < n; i++) {
-        cumulative_length[i] = cumulative_length[i-1] + 
-                               (points[i] - points[i-1]).norm();
+        current_len += (points[i] - points[i-1]).norm();
+        cumulative_length[i] = current_len;
+    }
+    double total_len_geom = cumulative_length[n-1];
+    
+    // 中间节点
+    for (int i = 1; i < n - degree_; i++) {
+        // 映射到 [0, total_time]
+        double u_norm = cumulative_length[i] / total_len_geom;
+        knots_[i + degree_] = u_norm * total_time;
     }
     
-    double total_length = cumulative_length[n-1];
+    // 终点重复节点
+    for (int i = m - degree_ - 1; i < m; i++) knots_[i] = total_time;
+}
+
+// 核心辅助函数：计算 t 时刻所有非零基函数的值及其一阶、二阶导数
+// 返回值: bases[k][j] 表示第 j 个基函数的 k 阶导数 (k=0,1,2)
+void BSpline::evaluateBasisDerivatives(double t, int span, 
+                                     std::vector<std::vector<double>>& bases) const {
+    // 初始化
+    bases.assign(3, std::vector<double>(degree_ + 1, 0.0));
     
-    for (int i = degree_ + 1; i < m - degree_ - 1; i++) {
-        int idx = i - degree_;
-        if (idx < n) {
-            knots_[i] = (cumulative_length[idx] / total_length) * total_time;
+    std::vector<double> left(degree_ + 1, 0.0);
+    std::vector<double> right(degree_ + 1, 0.0);
+    std::vector<std::vector<double>> ndu(degree_ + 1, std::vector<double>(degree_ + 1));
+    
+    ndu[0][0] = 1.0;
+    
+    // 1. 计算所有基函数值 (N_i,p) - 三角形迭代
+    for (int j = 1; j <= degree_; j++) {
+        left[j] = t - knots_[span + 1 - j];
+        right[j] = knots_[span + j] - t;
+        double saved = 0.0;
+        
+        for (int r = 0; r < j; r++) {
+            // 下三角部分
+            ndu[j][r] = right[r + 1] + left[j - r];
+            double temp = ndu[r][j - 1] / ndu[j][r];
+            
+            ndu[r][j] = saved + right[r + 1] * temp;
+            saved = left[j - r] * temp;
         }
+        ndu[j][j] = saved;
+    }
+    
+    // 存入0阶导数 (原值)
+    for (int j = 0; j <= degree_; j++) {
+        bases[0][j] = ndu[j][degree_];
+    }
+    
+    // 2. 计算导数
+    // a[k][j] 存储中间变量
+    std::vector<std::vector<double>> a(2, std::vector<double>(degree_ + 1));
+    
+    for (int r = 0; r <= degree_; r++) {
+        int s1 = 0; 
+        int s2 = 1; 
+        a[0][0] = 1.0;
+        
+        // 计算 k 阶导数
+        for (int k = 1; k <= 2; k++) { // 我们只需要到2阶
+            double d = 0.0;
+            int rk = r - k; 
+            int pk = degree_ - k;
+            
+            if (r >= k) {
+                a[s2][0] = a[s1][0] / ndu[pk + 1][rk];
+                d = a[s2][0] * ndu[rk][pk];
+            }
+            
+            int j1 = (rk >= -1) ? 1 : -rk;
+            int j2 = (r - 1 <= pk) ? k - 1 : degree_ - r;
+            
+            for (int j = j1; j <= j2; j++) {
+                a[s2][j] = (a[s1][j] - a[s1][j - 1]) / ndu[pk + 1][rk + j];
+                d += a[s2][j] * ndu[rk + j][pk];
+            }
+            
+            if (r <= pk) {
+                a[s2][k] = -a[s1][k - 1] / ndu[pk + 1][r];
+                d += a[s2][k] * ndu[r][pk];
+            }
+            
+            bases[k][r] = d;
+            std::swap(s1, s2);
+        }
+    }
+    
+    // 3. 修正导数系数 (乘以阶数因子)
+    double r = degree_;
+    for (int k = 1; k <= 2; k++) {
+        for (int j = 0; j <= degree_; j++) {
+            bases[k][j] *= r;
+        }
+        r *= (degree_ - k);
     }
 }
 
 Eigen::Vector3d BSpline::getPosition(double t) const {
-    // 限制t在有效范围内
+    if (control_points_.empty()) return Eigen::Vector3d::Zero();
     t = std::max(0.0, std::min(t, total_time_));
-    
-    Eigen::Vector3d result(0, 0, 0);
+    if (t >= total_time_) return control_points_.back();
+
     int span = findSpan(t);
     
-    // De Boor算法计算B样条值
-    for (int i = 0; i <= degree_; i++) {
-        int idx = span - degree_ + i;
-        if (idx >= 0 && idx < static_cast<int>(control_points_.size())) {
-            double basis = deBoor(idx, degree_, t, knots_);
-            result += control_points_[idx] * basis;
-        }
-    }
+    // 计算基函数
+    std::vector<std::vector<double>> bases;
+    evaluateBasisDerivatives(t, span, bases); // 只需0阶
     
-    return result;
+    Eigen::Vector3d p(0, 0, 0);
+    for (int i = 0; i <= degree_; i++) {
+        p += control_points_[span - degree_ + i] * bases[0][i];
+    }
+    return p;
 }
 
 Eigen::Vector3d BSpline::getVelocity(double t) const {
-    // 解析解：B样条一阶导数 = p * Σ [N_{i,p-1}(t) * (P_{i+1} - P_i) / (u_{i+p+1} - u_{i+1})]
-    // 边界处理
+    if (control_points_.size() < 2) return Eigen::Vector3d::Zero();
     t = std::max(0.0, std::min(t, total_time_));
 
-    if (control_points_.size() < 2) {
-        return Eigen::Vector3d::Zero();
-    }
-
-    Eigen::Vector3d result = Eigen::Vector3d::Zero();
     int span = findSpan(t);
-
-    // 遍历基函数支撑区间
-    for (int i = 0; i < degree_; i++) {  // 注意：导数阶数降低1，所以是 degree_-1
-        int idx = span - degree_ + i;
-        if (idx >= 0 && idx < static_cast<int>(control_points_.size()) - 1) {
-            // 计算导数系数
-            double denom = knots_[idx + degree_ + 1] - knots_[idx + 1];
-            if (denom > 1e-6) {
-                // 计算 p-1 阶基函数
-                double basis_deriv = deBoor(idx, degree_ - 1, t, knots_);
-                // 导数控制点
-                Eigen::Vector3d delta_p = control_points_[idx + 1] - control_points_[idx];
-                result += degree_ * basis_deriv * delta_p / denom;
-            }
-        }
+    std::vector<std::vector<double>> bases;
+    evaluateBasisDerivatives(t, span, bases);
+    
+    Eigen::Vector3d v(0, 0, 0);
+    for (int i = 0; i <= degree_; i++) {
+        // 使用1阶导数基函数直接对原控制点加权
+        v += control_points_[span - degree_ + i] * bases[1][i];
     }
-
-    return result;
+    return v;
 }
 
 Eigen::Vector3d BSpline::getAcceleration(double t) const {
-    // 解析解：B样条二阶导数 = p*(p-1) * Σ [N_{i,p-2}(t) * (ΔP_{i+1} - ΔP_i) / Δu_i]
-    // 其中 ΔP_i = (P_{i+1} - P_i) / (u_{i+p+1} - u_{i+1})
-
-    // 边界处理
+    // 必须有足够的点和阶数
+    if (control_points_.size() < 3 || degree_ < 2) return Eigen::Vector3d::Zero();
+    
     t = std::max(0.0, std::min(t, total_time_));
-
-    if (control_points_.size() < 3 || degree_ < 2) {
-        return Eigen::Vector3d::Zero();
-    }
-
-    // 先计算一阶导数控制点（速度控制点）
-    std::vector<Eigen::Vector3d> vel_control_points;
-    for (size_t i = 0; i < control_points_.size() - 1; i++) {
-        double denom = knots_[i + degree_ + 1] - knots_[i + 1];
-        if (denom > 1e-6) {
-            Eigen::Vector3d delta_p = control_points_[i + 1] - control_points_[i];
-            vel_control_points.push_back(degree_ * delta_p / denom);
-        } else {
-            vel_control_points.push_back(Eigen::Vector3d::Zero());
-        }
-    }
-
-    if (vel_control_points.size() < 2) {
-        return Eigen::Vector3d::Zero();
-    }
-
-    // 再计算二阶导数（加速度）
-    Eigen::Vector3d result = Eigen::Vector3d::Zero();
+    
     int span = findSpan(t);
-
-    // 遍历基函数支撑区间
-    for (int i = 0; i < degree_ - 1; i++) {  // 二阶导数：阶数降低2
-        int idx = span - degree_ + i;
-        if (idx >= 0 && idx < static_cast<int>(vel_control_points.size()) - 1) {
-            // 计算二阶导数系数
-            double denom = knots_[idx + degree_] - knots_[idx + 2];
-            if (denom > 1e-6) {
-                // 计算 p-2 阶基函数
-                double basis_deriv2 = deBoor(idx, degree_ - 2, t, knots_);
-                // 二阶导数控制点
-                Eigen::Vector3d delta_v = vel_control_points[idx + 1] - vel_control_points[idx];
-                result += (degree_ - 1) * basis_deriv2 * delta_v / denom;
-            }
-        }
+    std::vector<std::vector<double>> bases;
+    evaluateBasisDerivatives(t, span, bases);
+    
+    Eigen::Vector3d a(0, 0, 0);
+    for (int i = 0; i <= degree_; i++) {
+        // 使用2阶导数基函数直接对原控制点加权
+        a += control_points_[span - degree_ + i] * bases[2][i];
     }
-
-    return result;
+    return a;
 }
 
+// 法向量插值保持不变，但使用高效算法
 Eigen::Vector3d BSpline::getNormal(double t) const {
-    // 1. 边界保护
-    if (t <= 0.0) return normals_.front().normalized();
+    if (normals_.empty()) return Eigen::Vector3d(0,0,1);
+    t = std::max(0.0, std::min(t, total_time_));
     if (t >= total_time_) return normals_.back().normalized();
 
-    // 2. 核心修复：使用De Boor算法对法向量进行插值
-    // 原理与 getPosition 完全一致，保证 P(t) 和 N(t) 严格同步
     int span = findSpan(t);
+    std::vector<std::vector<double>> bases;
+    evaluateBasisDerivatives(t, span, bases);
 
-    // 初始化结果向量
-    Eigen::Vector3d result = Eigen::Vector3d::Zero();
-
-    // 遍历基函数支撑区间 (p+1个控制点)
+    Eigen::Vector3d n(0, 0, 0);
     for (int i = 0; i <= degree_; i++) {
-        int idx = span - degree_ + i;
-        if (idx >= 0 && idx < static_cast<int>(normals_.size())) {
-            // 计算基函数值 N_{i,p}(t)
-            double basis = deBoor(idx, degree_, t, knots_);
-            result += normals_[idx] * basis;
-        }
+        n += normals_[span - degree_ + i] * bases[0][i];
     }
-
-    // 3. 归一化 (插值后的向量长度可能不为1)
-    if (result.norm() > 1e-6) {
-        result.normalize();
-    } else {
-        // 异常回退：如果插值结果为0，返回最近的控制点法向
-        int safe_idx = std::min((int)normals_.size()-1, std::max(0, span));
-        return normals_[safe_idx].normalized();
-    }
-
-    return result;
+    return n.normalized();
 }
 
 int BSpline::findSpan(double t) const {
     int n = control_points_.size() - 1;
+    if (t >= knots_[n + 1]) return n; // 特殊处理末端
     
-    // 特殊情况
-    if (t >= knots_[n + 1]) return n;
-    if (t <= knots_[degree_]) return degree_;
-    
-    // 二分查找
+    // 二分查找标准实现
     int low = degree_;
     int high = n + 1;
     int mid = (low + high) / 2;
     
     while (t < knots_[mid] || t >= knots_[mid + 1]) {
-        if (t < knots_[mid]) {
-            high = mid;
-        } else {
-            low = mid;
-        }
+        if (t < knots_[mid]) high = mid;
+        else low = mid;
         mid = (low + high) / 2;
     }
-    
     return mid;
 }
 
-double BSpline::deBoor(int i, int p, double t, 
-                       const std::vector<double>& knots) const {
-    // B样条基函数（递归定义）
-    if (p == 0) {
-        return (t >= knots[i] && t < knots[i+1]) ? 1.0 : 0.0;
-    }
-    
-    double denom1 = knots[i+p] - knots[i];
-    double denom2 = knots[i+p+1] - knots[i+1];
-    
-    double c1 = 0.0, c2 = 0.0;
-    
-    if (denom1 > 1e-6) {
-        c1 = (t - knots[i]) / denom1 * deBoor(i, p-1, t, knots);
-    }
-    
-    if (denom2 > 1e-6) {
-        c2 = (knots[i+p+1] - t) / denom2 * deBoor(i+1, p-1, t, knots);
-    }
-    
-    return c1 + c2;
-}
+// 移除旧的递归 deBoor 函数
 
 } // namespace ship_painter
-// ```
-
-// ---
-
-// ### **Step 2: 创建ROS消息定义**
-
-// **文件位置**：`msg/Bspline.msg`
-// ```
-// # B样条轨迹消息（参考EGO-Planner）
-// int32 order                    # B样条阶数
-// time start_time                # 轨迹开始时间
-// float64 duration               # 轨迹持续时间
-
-// float64[] knots                # 节点向量
-// geometry_msgs/Point[] pos_pts  # 位置控制点
-// geometry_msgs/Vector3[] normals # 对应的法向量
-// ```
-
-// **文件位置**：`msg/BsplineLayer.msg`
-// ```
-// # 包含所有层的B样条轨迹
-// Bspline[] layers               # 每层的B样条
-// Bspline[] transitions          # 层间过渡轨迹

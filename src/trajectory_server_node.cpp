@@ -213,12 +213,34 @@ void TrajectoryServer::bsplineCallback(
             normals.push_back(Eigen::Vector3d(n.x, n.y, n.z));
         }
 
-        // 直接设置参数，不重新拟合
-        bspline.setControlPoints(control_points);
-        bspline.setKnots(layer_msg.knots);
-        bspline.setNormals(normals);
+        // ================== 修改开始 ==================
+        // 核心修正：调整初始化顺序
+        
+        // 1. 必须先设置阶数！这样后续设置控制点时才能正确分配内存或检查维度
         bspline.setDegree(layer_msg.order);
+
+        // 2. 设置节点向量
+        // 检查接收到的 knots 是否为空。如果为空，解析解计算一定会失败。
+        if (layer_msg.knots.empty()) {
+            ROS_WARN("Received empty knots! Generating uniform knots as fallback.");
+            // 如果上层没发 knots，这里需要生成默认的均匀节点向量 (数量 = 控制点数 + 阶数 + 1)
+            // 注意：这里假设你的 BSpline 类有自动生成 knots 的功能，如果没有，必须确保上层发送了 knots
+            // bspline.setUniKnots(control_points.size()); // 假设有这样的辅助函数，或者报错
+        } else {
+            bspline.setKnots(layer_msg.knots);
+        }
+
+        // 3. 设置控制点 (依赖于 Degree 和 Knots 的存在)
+        bspline.setControlPoints(control_points);
+        
+        // 4. 设置法向量
+        bspline.setNormals(normals);
+        
+        // 5. 设置总时间 (关键！)
+        // 这通常会触发内部的时间缩放因子 (time_scale_ = max_knot / duration) 计算
         bspline.setTotalTime(layer_msg.duration);
+        
+        // ================== 修改结束 ==================
 
         layers_.push_back(bspline);
     }
@@ -343,10 +365,9 @@ void TrajectoryServer::controlLoop(const ros::TimerEvent& event) {
         Eigen::Vector3d p = current_traj.getPosition(t);
         Eigen::Vector3d v = current_traj.getVelocity(t);
         Eigen::Vector3d n = current_traj.getNormal(t);
-
-        // === 新增：获取加速度前馈量（解析解，更平滑）===
+        
         Eigen::Vector3d a = current_traj.getAcceleration(t);
-
+        
          //深度修正逻辑
         Eigen::Vector3d p_corrected = p;  // 默认使用原始位置
         

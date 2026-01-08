@@ -71,10 +71,10 @@ private:
         double total_time
     );
     
-    double deBoor(int k, int degree, double t, 
-                  const std::vector<double>& knots) const;
-    
     int findSpan(double t) const;
+
+    void evaluateBasisDerivatives(double t, int span, 
+                                  std::vector<std::vector<double>>& bases) const;
 };
 
 } // namespace ship_painter
