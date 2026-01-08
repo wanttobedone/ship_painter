@@ -812,12 +812,7 @@ pcl::PointCloud<pcl::PointNormal>::Ptr PathPlanner::sampleMeshSurface(const pcl:
         triangle_idx++;
     }
     
-    //调试信息，用于判断stl采样点云问题
-    // ROS_INFO("=== Uniform Area-Based Sampling ===");
-    // ROS_INFO("Total polygons: %zu", total_polygons);
-    // ROS_INFO("Valid triangles: %zu", triangle_idx);
-    // ROS_INFO("Skipped triangles: %zu", skipped_triangles);
-    // ROS_INFO("Total surface area: %.6f", total_area);
+
     
     // 第二步：按面积比例分配采样点
     std::vector<size_t> samples_per_triangle(triangle_areas.size());
@@ -1232,27 +1227,22 @@ std::vector<Eigen::Vector3d> PathPlanner::recomputeNormalsForOffsetContour(
         tangent.z() = 0;  // 确保在XY平面
         tangent.normalize();
         
-        // 根据绕向旋转90度得到法向量
         Eigen::Vector3d normal;
         if (is_clockwise) {
-            // 顺时针轮廓：内部在右侧，顺时针旋转90度
-            // (x, y) → (y, -x)
+            // 顺时针轮廓（CW）：沿路径前进，内部在右侧，外部在左侧
+            // 需要法向量指向左侧（外部）：逆时针旋转90度
+            // (x, y) → (-y, x)
             normal = Eigen::Vector3d(tangent.y(), -tangent.x(), 0);
         } else {
-            // 逆时针轮廓：内部在左侧，逆时针旋转90度
-            // (x, y) → (-y, x)
+            // 逆时针轮廓（CCW）：沿路径前进，内部在左侧，外部在右侧
+            // 需要法向量指向右侧（外部）：顺时针旋转90度
+            // (x, y) → (y, -x)
             normal = Eigen::Vector3d(-tangent.y(), tangent.x(), 0);
         }
         
         normal.normalize();
         normals.push_back(normal);
         
-        // // 调试输出前几个点
-        // if (i < 5) {
-        //     ROS_INFO("  [%zu] pos=[%.2f, %.2f], tangent=[%.3f, %.3f], normal=[%.3f, %.3f]",
-        //              i, offset_contour[i].x(), offset_contour[i].y(),
-        //              tangent.x(), tangent.y(), normal.x(), normal.y());
-        // }
     }
     
     //可选的平滑处理

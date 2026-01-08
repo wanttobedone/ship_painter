@@ -1267,7 +1267,6 @@ void ShipPainterNode::run() {
     //    彻底解决层切换时的速度/位置不连续问题
     // =========================================================================
 
-    ROS_INFO("========================================");
     ROS_INFO("Generating GLOBAL merged B-spline trajectory...");
 
     // 9.1 获取当前无人机精确状态（作为轨迹起点）
@@ -1323,10 +1322,8 @@ void ShipPainterNode::run() {
     bspline_layers_.push_back(global_layer_wrapper);
     bsplines_generated_ = true;
 
-    // =========================================================================
+
     // 10. 发布全局轨迹到 trajectory_server
-    //     关键：msg.layers中只有一个元素（全局长轨迹）
-    // =========================================================================
 
     ROS_INFO("Publishing global trajectory to trajectory_server...");
     ship_painter::BsplineLayer msg;
@@ -1362,9 +1359,9 @@ void ShipPainterNode::run() {
 
     // 发布
     bspline_pub_.publish(msg);
-    ROS_INFO("✓ Global trajectory published (1 unified trajectory, %zu control points)",
+    ROS_INFO("Global trajectory published (1 unified trajectory, %zu control points)",
              global_bspline.getControlPoints().size());
-    ROS_INFO("========================================");
+
     
     ROS_INFO("Maintaining setpoint stream, waiting for trajectory_server to take over...");
 

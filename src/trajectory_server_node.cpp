@@ -391,26 +391,30 @@ void TrajectoryServer::controlLoop(const ros::TimerEvent& event) {
         }
         
         // 计算yaw（保持机头朝向表面）
-        Eigen::Vector3d spray_dir = -n;
+        Eigen::Vector3d spray_dir = -n; //-/+号后续要在看一下
         double yaw = std::atan2(spray_dir.y(), spray_dir.x());
-        
+
+
+
         // 发布修正后的目标
         mavros_msgs::PositionTarget target;
         target.header.stamp = ros::Time::now();
         target.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED;
+
+
         
         target.position.x = p_corrected.x();  // 使用修正后的位置
         target.position.y = p_corrected.y();
         target.position.z = p_corrected.z();
-        
+
         target.velocity.x = v.x();
         target.velocity.y = v.y();
         target.velocity.z = v.z();
-        
+
         target.yaw = yaw;
         target.yaw_rate = 0.0;
-        
-        target.type_mask = 
+
+        target.type_mask =
             mavros_msgs::PositionTarget::IGNORE_AFX |
             mavros_msgs::PositionTarget::IGNORE_AFY |
             mavros_msgs::PositionTarget::IGNORE_AFZ;
