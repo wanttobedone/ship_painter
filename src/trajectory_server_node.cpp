@@ -344,6 +344,9 @@ void TrajectoryServer::controlLoop(const ros::TimerEvent& event) {
         Eigen::Vector3d v = current_traj.getVelocity(t);
         Eigen::Vector3d n = current_traj.getNormal(t);
 
+        // === 新增：获取加速度前馈量（解析解，更平滑）===
+        Eigen::Vector3d a = current_traj.getAcceleration(t);
+
          //深度修正逻辑
         Eigen::Vector3d p_corrected = p;  // 默认使用原始位置
         
@@ -418,13 +421,19 @@ void TrajectoryServer::controlLoop(const ros::TimerEvent& event) {
         target.velocity.y = v.y();
         target.velocity.z = v.z();
 
+        // === 新增：填充加速度前馈（与坐标系保持一致：NED）===
+        target.acceleration_or_force.x = a.x();
+        target.acceleration_or_force.y = a.y();
+        target.acceleration_or_force.z = a.z();
+
         target.yaw = yaw;
         target.yaw_rate = 0.0;
 
-        target.type_mask =
-            mavros_msgs::PositionTarget::IGNORE_AFX |
-            mavros_msgs::PositionTarget::IGNORE_AFY |
-            mavros_msgs::PositionTarget::IGNORE_AFZ;
+        // === 关键修改：解除加速度屏蔽，启用全状态前馈 ===
+        // 仅屏蔽偏航速率（因为我们直接控制 yaw）
+        // 注意：发送的是加速度（m/s²），不是力（N），所以不需要 IGNORE_FORCE
+        // PX4 在接收 Position + Velocity + Acceleration 时跟踪性能最佳
+        target.type_mask = mavros_msgs::PositionTarget::IGNORE_YAW_RATE;
         
         setpoint_pub_.publish(target);
 

@@ -99,19 +99,84 @@ Eigen::Vector3d BSpline::getPosition(double t) const {
 }
 
 Eigen::Vector3d BSpline::getVelocity(double t) const {
-    // 数值微分（简单实现）
-    double dt = 0.001;
-    Eigen::Vector3d p1 = getPosition(t);
-    Eigen::Vector3d p2 = getPosition(t + dt);
-    return (p2 - p1) / dt;
+    // 解析解：B样条一阶导数 = p * Σ [N_{i,p-1}(t) * (P_{i+1} - P_i) / (u_{i+p+1} - u_{i+1})]
+    // 边界处理
+    t = std::max(0.0, std::min(t, total_time_));
+
+    if (control_points_.size() < 2) {
+        return Eigen::Vector3d::Zero();
+    }
+
+    Eigen::Vector3d result = Eigen::Vector3d::Zero();
+    int span = findSpan(t);
+
+    // 遍历基函数支撑区间
+    for (int i = 0; i < degree_; i++) {  // 注意：导数阶数降低1，所以是 degree_-1
+        int idx = span - degree_ + i;
+        if (idx >= 0 && idx < static_cast<int>(control_points_.size()) - 1) {
+            // 计算导数系数
+            double denom = knots_[idx + degree_ + 1] - knots_[idx + 1];
+            if (denom > 1e-6) {
+                // 计算 p-1 阶基函数
+                double basis_deriv = deBoor(idx, degree_ - 1, t, knots_);
+                // 导数控制点
+                Eigen::Vector3d delta_p = control_points_[idx + 1] - control_points_[idx];
+                result += degree_ * basis_deriv * delta_p / denom;
+            }
+        }
+    }
+
+    return result;
 }
 
 Eigen::Vector3d BSpline::getAcceleration(double t) const {
-    // 数值二阶微分
-    double dt = 0.001;
-    Eigen::Vector3d v1 = getVelocity(t);
-    Eigen::Vector3d v2 = getVelocity(t + dt);
-    return (v2 - v1) / dt;
+    // 解析解：B样条二阶导数 = p*(p-1) * Σ [N_{i,p-2}(t) * (ΔP_{i+1} - ΔP_i) / Δu_i]
+    // 其中 ΔP_i = (P_{i+1} - P_i) / (u_{i+p+1} - u_{i+1})
+
+    // 边界处理
+    t = std::max(0.0, std::min(t, total_time_));
+
+    if (control_points_.size() < 3 || degree_ < 2) {
+        return Eigen::Vector3d::Zero();
+    }
+
+    // 先计算一阶导数控制点（速度控制点）
+    std::vector<Eigen::Vector3d> vel_control_points;
+    for (size_t i = 0; i < control_points_.size() - 1; i++) {
+        double denom = knots_[i + degree_ + 1] - knots_[i + 1];
+        if (denom > 1e-6) {
+            Eigen::Vector3d delta_p = control_points_[i + 1] - control_points_[i];
+            vel_control_points.push_back(degree_ * delta_p / denom);
+        } else {
+            vel_control_points.push_back(Eigen::Vector3d::Zero());
+        }
+    }
+
+    if (vel_control_points.size() < 2) {
+        return Eigen::Vector3d::Zero();
+    }
+
+    // 再计算二阶导数（加速度）
+    Eigen::Vector3d result = Eigen::Vector3d::Zero();
+    int span = findSpan(t);
+
+    // 遍历基函数支撑区间
+    for (int i = 0; i < degree_ - 1; i++) {  // 二阶导数：阶数降低2
+        int idx = span - degree_ + i;
+        if (idx >= 0 && idx < static_cast<int>(vel_control_points.size()) - 1) {
+            // 计算二阶导数系数
+            double denom = knots_[idx + degree_] - knots_[idx + 2];
+            if (denom > 1e-6) {
+                // 计算 p-2 阶基函数
+                double basis_deriv2 = deBoor(idx, degree_ - 2, t, knots_);
+                // 二阶导数控制点
+                Eigen::Vector3d delta_v = vel_control_points[idx + 1] - vel_control_points[idx];
+                result += (degree_ - 1) * basis_deriv2 * delta_v / denom;
+            }
+        }
+    }
+
+    return result;
 }
 
 Eigen::Vector3d BSpline::getNormal(double t) const {
