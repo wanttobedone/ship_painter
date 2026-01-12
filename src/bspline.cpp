@@ -76,8 +76,8 @@ void BSpline::generateChordLengthKnots(
     for (int i = m - degree_ - 1; i < m; i++) knots_[i] = total_time;
 }
 
-// 核心辅助函数：计算 t 时刻所有非零基函数的值及其一阶、二阶导数
-// 返回值: bases[k][j] 表示第 j 个基函数的 k 阶导数 (k=0,1,2)
+    // 辅助函数：计算 t 时刻所有非零基函数的值及其一阶、二阶导数
+    // 返回值: bases[k][j] 表示第 j 个基函数的 k 阶导数 (k=0,1,2)
 void BSpline::evaluateBasisDerivatives(double t, int span, 
                                      std::vector<std::vector<double>>& bases) const {
     // 初始化

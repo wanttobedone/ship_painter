@@ -1,0 +1,132 @@
+<?xml version="1.0" ?>
+<sdf version='1.6'>
+  <model name='iris_vins_fusion'>
+    <!-- Base Iris Model -->
+    <include>
+      <uri>model://iris</uri>
+    </include>
+
+    <!-- Stereo Camera Link -->
+    <link name="stereo_camera_link">
+      <pose>0.1 0 0 0 0 0</pose>
+      <inertial>
+        <mass>0.01</mass>
+        <inertia>
+          <ixx>4.15e-6</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>2.407e-6</iyy>
+          <iyz>0</iyz>
+          <izz>2.407e-6</izz>
+        </inertia>
+      </inertial>
+
+      <!-- Stereo Camera Sensor -->
+      <sensor type="multicamera" name="stereo_camera">
+        <update_rate>20.0</update_rate>
+        <camera name="left">
+          <pose>0 0.05 0 0 0 0</pose>
+          <horizontal_fov>1.3962634</horizontal_fov>
+          <image>
+            <width>640</width>
+            <height>480</height>
+            <format>R8G8B8</format>
+          </image>
+          <clip>
+            <near>0.02</near>
+            <far>300</far>
+          </clip>
+          <noise>
+            <type>gaussian</type>
+            <mean>0.0</mean>
+            <stddev>0.007</stddev>
+          </noise>
+        </camera>
+        <camera name="right">
+          <pose>0 -0.05 0 0 0 0</pose>
+          <horizontal_fov>1.3962634</horizontal_fov>
+          <image>
+            <width>640</width>
+            <height>480</height>
+            <format>R8G8B8</format>
+          </image>
+          <clip>
+            <near>0.02</near>
+            <far>300</far>
+          </clip>
+          <noise>
+            <type>gaussian</type>
+            <mean>0.0</mean>
+            <stddev>0.007</stddev>
+          </noise>
+        </camera>
+        <plugin name="stereo_camera_controller" filename="libgazebo_ros_multicamera.so">
+          <alwaysOn>true</alwaysOn>
+          <updateRate>20.0</updateRate>
+          <cameraName>stereo_ir</cameraName>
+          <imageTopicName>image_raw</imageTopicName>
+          <cameraInfoTopicName>camera_info</cameraInfoTopicName>
+          <frameName>stereo_camera_link</frameName>
+          <hackBaseline>0.1</hackBaseline>
+          <distortionK1>0.0</distortionK1>
+          <distortionK2>0.0</distortionK2>
+          <distortionK3>0.0</distortionK3>
+          <distortionT1>0.0</distortionT1>
+          <distortionT2>0.0</distortionT2>
+        </plugin>
+      </sensor>
+    </link>
+
+    <!-- Joint to attach stereo camera to base_link -->
+    <joint name="stereo_camera_joint" type="fixed">
+      <child>stereo_camera_link</child>
+      <parent>iris::base_link</parent>
+      <pose>0.1 0 0 0 0 0</pose>
+    </joint>
+
+    <!-- IMU Plugin with Noise (for VINS-Fusion) -->
+    <plugin name="imu_plugin" filename="libgazebo_ros_imu.so">
+      <alwaysOn>true</alwaysOn>
+      <bodyName>iris::base_link</bodyName>
+      <topicName>/imu/data</topicName>
+      <serviceName>imu_service</serviceName>
+      <gaussianNoise>0.01</gaussianNoise>
+      <updateRate>200.0</updateRate>
+      <imu>
+        <noise>
+          <type>gaussian</type>
+          <rate>
+            <mean>0.0</mean>
+            <stddev>0.001</stddev>
+            <bias_mean>0.0</bias_mean>
+            <bias_stddev>0.0002</bias_stddev>
+          </rate>
+          <accel>
+            <mean>0.0</mean>
+            <stddev>0.01</stddev>
+            <bias_mean>0.0</bias_mean>
+            <bias_stddev>0.0002</bias_stddev>
+          </accel>
+        </noise>
+      </imu>
+    </plugin>
+
+    <!-- GPS Plugin -->
+    <plugin name="gps_plugin" filename="libhector_gazebo_ros_gps.so">
+      <updateRate>10.0</updateRate>
+      <bodyName>iris::base_link</bodyName>
+      <frameId>base_link</frameId>
+      <topicName>/gps/fix</topicName>
+      <velocityTopicName>/gps/fix_velocity</velocityTopicName>
+      <referenceLatitude>22.332</referenceLatitude>
+      <referenceLongitude>114.265</referenceLongitude>
+      <referenceAltitude>10.0</referenceAltitude>
+      <referenceHeading>0</referenceHeading>
+      <drift>0.0001 0.0001 0.0001</drift>
+      <gaussianNoise>0.01 0.01 0.01</gaussianNoise>
+      <velocityDrift>0 0 0</velocityDrift>
+      <velocityGaussianNoise>0.01 0.01 0.01</velocityGaussianNoise>
+    </plugin>
+
+  </model>
+</sdf>

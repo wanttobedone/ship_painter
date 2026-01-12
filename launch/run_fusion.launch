@@ -1,0 +1,59 @@
+<launch>
+    <!-- 设置无人机型号 -->
+    <env name="PX4_SIM_MODEL" value="iris" />
+    
+    <!-- 添加模型路径到Gazebo环境变量 -->
+    <env name="GAZEBO_MODEL_PATH" value="$(find ship_painter)/models:$(find mavlink_sitl_gazebo)/models:$(optenv GAZEBO_MODEL_PATH)" />
+    
+    <!-- 启动 PX4 SITL -->
+    <arg name="est" default="ekf2"/>
+    <arg name="vehicle" default="iris"/>
+    <arg name="world" default="$(find ship_painter)/worlds/ship.world"/>
+    
+    <!-- 指定使用 iris_stereo_camera 的 SDF 文件 -->
+    <arg name="sdf" default="$(find mavlink_sitl_gazebo)/models/iris_stereo_camera/iris_stereo_camera.sdf"/>
+    
+    <!-- PX4 SITL 核心 -->
+    <include file="$(find px4)/launch/mavros_posix_sitl.launch">
+        <arg name="est" value="$(arg est)"/>
+        <arg name="vehicle" value="$(arg vehicle)"/>
+        <arg name="world" value="$(arg world)"/>
+        <arg name="sdf" value="$(arg sdf)"/>
+    </include>
+    
+    <!-- 定义船体模型位置参数（统一管理） -->
+    <arg name="ship_x" default="3.5"/>
+    <arg name="ship_y" default="0"/>
+    <arg name="ship_z" default="0.25"/>
+    
+    <!-- 生成船体模型 -->
+    <node name="spawn_ship" pkg="gazebo_ros" type="spawn_model" 
+          args="-sdf -file $(find ship_painter)/models/test.sdf -model boat1 
+                -x $(arg ship_x) 
+                -y $(arg ship_y) 
+                -z $(arg ship_z)" 
+          launch-prefix="bash -c 'sleep 5; $0 $@' " 
+          output="screen">
+        <!-- 输出生成位置信息 -->
+        <param name="model_x" value="$(arg ship_x)"/>
+        <param name="model_y" value="$(arg ship_y)"/>
+        <param name="model_z" value="$(arg ship_z)"/>
+    </node>
+    
+    <!-- 将模型位置保存到参数服务器，供其他节点使用 -->
+    <param name="/ship_model/x" value="$(arg ship_x)"/>
+    <param name="/ship_model/y" value="$(arg ship_y)"/>
+    <param name="/ship_model/z" value="$(arg ship_z)"/>
+
+    <!-- VINS-Fusion Estimator -->
+    <node name="vins_estimator" pkg="vins" type="vins_node" output="screen" 
+          launch-prefix="bash -c 'sleep 10; $0 $@' "
+          args="/home/ncu/catkin_ws/src/VINS-Fusion/config/simulation/simulation_config.yaml">
+    </node>
+
+    <!-- RViz Visualization -->
+    <node name="rvizvisualisation" pkg="rviz" type="rviz" output="screen"
+          launch-prefix="bash -c 'sleep 8; $0 $@' "
+          args="-d /home/ncu/catkin_ws/src/VINS-Fusion/config/vins_rviz_config.rviz" />
+    
+</launch>
