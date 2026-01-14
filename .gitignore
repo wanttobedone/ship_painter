@@ -21,3 +21,5 @@ build/
 # 其他
 *.bag
 *.log
+
+scripts/

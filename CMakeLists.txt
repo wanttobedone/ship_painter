@@ -21,12 +21,13 @@ find_package(catkin REQUIRED COMPONENTS
   image_transport
   std_msgs
   geometry_msgs
+  nav_msgs
   mavros_msgs
-  sensor_msgs        
-  cv_bridge          
-  image_transport    
-  tf2                
-  tf2_geometry_msgs  
+  sensor_msgs
+  cv_bridge
+  image_transport
+  tf2
+  tf2_geometry_msgs
   visualization_msgs
   tf2_ros
   pcl_ros
@@ -307,4 +308,21 @@ add_executable(hover_test_node src/hover_test_node.cpp)
 # 链接库
 target_link_libraries(hover_test_node
   ${catkin_LIBRARIES}
+)
+
+# === VINS to MAVROS Bridge Node ===
+add_executable(vins_to_mavros_bridge src/vins_to_mavros_bridge.cpp)
+
+# 链接库
+target_link_libraries(vins_to_mavros_bridge
+  ${catkin_LIBRARIES}
+)
+
+# === 安装Python脚本和Shell脚本 ===
+# 安装auto_spawn_model.py等Python工具脚本
+catkin_install_python(PROGRAMS
+  scripts/auto_spawn_model.py
+  scripts/set_px4_vision_params.py
+  scripts/set_px4_vision_params.sh
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

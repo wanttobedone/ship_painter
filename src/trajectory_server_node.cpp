@@ -213,10 +213,8 @@ void TrajectoryServer::bsplineCallback(
             normals.push_back(Eigen::Vector3d(n.x, n.y, n.z));
         }
 
-        // ================== 修改开始 ==================
-        // 核心修正：调整初始化顺序
         
-        // 1. 必须先设置阶数！这样后续设置控制点时才能正确分配内存或检查维度
+        // 1. 必须先设置阶数这样后续设置控制点时才能正确分配内存或检查维度
         bspline.setDegree(layer_msg.order);
 
         // 2. 设置节点向量
@@ -236,11 +234,10 @@ void TrajectoryServer::bsplineCallback(
         // 4. 设置法向量
         bspline.setNormals(normals);
         
-        // 5. 设置总时间 (关键！)
+        // 5. 设置总时间
         // 这通常会触发内部的时间缩放因子 (time_scale_ = max_knot / duration) 计算
         bspline.setTotalTime(layer_msg.duration);
-        
-        // ================== 修改结束 ==================
+
 
         layers_.push_back(bspline);
     }
@@ -450,9 +447,9 @@ void TrajectoryServer::controlLoop(const ros::TimerEvent& event) {
         target.yaw = yaw;
         target.yaw_rate = 0.0;
 
-        // === 关键修改：解除加速度屏蔽，启用全状态前馈 ===
-        // 仅屏蔽偏航速率（因为我们直接控制 yaw）
-        // 注意：发送的是加速度（m/s²），不是力（N），所以不需要 IGNORE_FORCE
+        // 解除加速度屏蔽，启用全状态前馈
+        // 仅屏蔽偏航速率（直接控制 yaw）
+        // 发送的是加速度（m/s²），不是力（N），所以不需要 IGNORE_FORCE
         // PX4 在接收 Position + Velocity + Acceleration 时跟踪性能最佳
         target.type_mask = mavros_msgs::PositionTarget::IGNORE_YAW_RATE;
         
@@ -527,7 +524,7 @@ void TrajectoryServer::controlLoop(const ros::TimerEvent& event) {
         
         trajectory_vis_pub_.publish(marker);
 
-    // ===== 发布实际飞行轨迹（黄色）=====
+    //发布实际飞行轨迹（黄色）
     if (!actual_trajectory_points_.empty()) {
         visualization_msgs::Marker actual_traj_marker;
         actual_traj_marker.header.frame_id = "map";

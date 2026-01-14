@@ -9,25 +9,18 @@
       <visual name="visual">
         <geometry>
           <mesh>
-            <uri>model://model_for_test.dae</uri>
+            <uri>model://model4cube.dae</uri>
             <scale>1.0 1.0 1.0</scale>
           </mesh>
         </geometry>
-        <material>
-            <ambient>1.0 0.0 0.0 1.0</ambient> <!-- 环境光下呈现的颜色 (RGBA) -->
-            <diffuse>1.0 0.0 0.0 1.0</diffuse> <!-- 漫反射光下呈现的颜色 (RGBA) -->
-            <specular>0.1 0.1 0.1 1.0</specular> <!-- 镜面高光的颜色和强度 (RGBA) -->
-            <emissive>0.0 0.0 0.0 1.0</emissive> <!-- 自发光颜色 (RGBA) -->
-        </material>
       </visual>
       
-      <!-- 碰撞几何体 - 修改为与视觉模型一致的mesh，防止深度相机穿模 -->
+      <!-- 碰撞几何体 -->
       <collision name="collision">
         <geometry>
-          <mesh>
-            <uri>model://model_for_test.dae</uri>
-            <scale>1.0 1.0 1.0</scale>
-          </mesh>
+          <box>
+            <size>0.05 0.05 0.05</size>
+          </box>
         </geometry>
       </collision>
       

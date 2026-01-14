@@ -1,0 +1,114 @@
+<?xml version="1.0"?>
+<sdf version="1.7">
+  <world name="ship_world">
+    <!-- 基本环境 -->
+    <include>
+      <uri>model://sun</uri>
+    </include>
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+
+    <!-- 纹理丰富的物体 for VINS feature extraction -->
+    <!-- Bookshelf 1 -->
+    <include>
+      <uri>model://bookshelf</uri>
+      <pose>5 3 0 0 0 0</pose>
+      <name>bookshelf_1</name>
+    </include>
+
+    <!-- Bookshelf 2 -->
+    <include>
+      <uri>model://bookshelf</uri>
+      <pose>5 -3 0 0 0 1.57</pose>
+      <name>bookshelf_2</name>
+    </include>
+
+    <!-- Construction Barrel -->
+    <include>
+      <uri>model://construction_barrel</uri>
+      <pose>3 0 0 0 0 0</pose>
+      <name>barrel_1</name>
+    </include>
+
+    <!-- Dumpster -->
+    <include>
+      <uri>model://dumpster</uri>
+      <pose>7 0 0 0 0 0</pose>
+      <name>dumpster_1</name>
+    </include>
+
+    <!-- Jersey Barrier -->
+    <include>
+      <uri>model://jersey_barrier</uri>
+      <pose>1 4 0 0 0 0</pose>
+      <name>barrier_1</name>
+    </include>
+
+    <!-- Cinder Block Wall for rich texture -->
+    <include>
+      <uri>model://cinder_block</uri>
+      <pose>0 5 0.2 0 0 0</pose>
+      <name>cinder_1</name>
+    </include>
+    <include>
+      <uri>model://cinder_block</uri>
+      <pose>0.4 5 0.2 0 0 0</pose>
+      <name>cinder_2</name>
+    </include>
+    <include>
+      <uri>model://cinder_block</uri>
+      <pose>0.8 5 0.2 0 0 0</pose>
+      <name>cinder_3</name>
+    </include>
+
+    <!-- Brick Box -->
+    <include>
+      <uri>model://brick_box_3x1x3</uri>
+      <pose>-3 2 0 0 0 0</pose>
+      <name>brick_box_1</name>
+    </include>
+
+    <!-- 光照 -->
+    <light type="directional" name="sunlight">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <attenuation>
+        <range>1000</range>
+        <constant>0.9</constant>
+        <linear>0.01</linear>
+        <quadratic>0.001</quadratic>
+      </attenuation>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+    
+    <!-- 物理引擎参数 -->
+    <physics type="ode">
+      <max_step_size>0.002</max_step_size>
+      <real_time_factor>1</real_time_factor>
+      <real_time_update_rate>500</real_time_update_rate>
+    </physics>
+
+ <!--<plugin name='wind_plugin' filename='libgazebo_wind_plugin.so'>
+  <frameId>base_link</frameId>
+  <robotNamespace/>
+
+  <windDirectionMean>0 1 0</windDirectionMean>
+
+  <windVelocityMean>0.0</windVelocityMean>
+
+  <windGustVelocityMax>25.0</windGustVelocityMax>
+
+  <windGustStart>50.0</windGustStart>
+
+  <windGustDuration>10.0</windGustDuration>
+
+  <windGustDirectionMean>0 1 0</windGustDirectionMean>
+  
+  <windPubTopic>world_wind</windPubTopic>
+</plugin>-->
+
+  </world>
+</sdf>

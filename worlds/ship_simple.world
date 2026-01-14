@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+<sdf version="1.7">
+  <world name="ship_world_simple">
+    <!-- 基本环境 - 只使用本地存在的模型 -->
+    <include>
+      <uri>model://sun</uri>
+    </include>
+
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+
+    <!-- 光照 -->
+    <light type="directional" name="sunlight">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <attenuation>
+        <range>1000</range>
+        <constant>0.9</constant>
+        <linear>0.01</linear>
+        <quadratic>0.001</quadratic>
+      </attenuation>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <!-- 物理引擎参数 -->
+    <physics type="ode">
+      <max_step_size>0.002</max_step_size>
+      <real_time_factor>1</real_time_factor>
+      <real_time_update_rate>500</real_time_update_rate>
+    </physics>
+
+    <!-- 注释：
+         这是简化版world文件，移除了所有需要下载的Gazebo官方模型
+         用于测试auto_spawn_model.py功能
+
+         如需添加纹理物体用于VINS，请先下载模型或使用自定义简单几何体
+    -->
+
+  </world>
+</sdf>

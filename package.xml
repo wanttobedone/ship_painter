@@ -47,7 +47,10 @@
   <exec_depend>rospy</exec_depend>
   <exec_depend>std_msgs</exec_depend>
 
-  
+  <!-- Python依赖 (用于auto_spawn_model.py等脚本) -->
+  <exec_depend>python3-trimesh</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+
   <!-- 添加系统库运行时依赖 -->
   <exec_depend>libpcl-dev</exec_depend>
   <exec_depend>libeigen3-dev</exec_depend>

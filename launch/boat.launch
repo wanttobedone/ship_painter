@@ -1,44 +1,74 @@
 <launch>
-    <!-- 设置无人机型号 -->
+
+    <!-- 环境变量配置 -->
     <env name="PX4_SIM_MODEL" value="iris" />
-    
-    <!-- 添加模型路径到Gazebo环境变量 -->
-    <env name="GAZEBO_MODEL_PATH" value="$(find ship_painter)/models:$(optenv GAZEBO_MODEL_PATH)" />
-    
-     <!-- 启动 PX4 SITL -->
+    <!-- 禁用Gazebo在线模型下载，使用本地模型 -->
+    <env name="GAZEBO_MODEL_DATABASE_URI" value="" />
+    <!-- 添加模型搜索路径：ship_painter模型 -> 本地下载的模型 -> mavlink_sitl_gazebo模型 -->
+    <env name="GAZEBO_MODEL_PATH" value="$(find ship_painter)/models:$(env HOME)/.gazebo/models:$(find mavlink_sitl_gazebo)/models:$(optenv GAZEBO_MODEL_PATH)" />
+
+    <!-- 仿真环境参数 -->
     <arg name="est" default="ekf2"/>
     <arg name="vehicle" default="iris"/>
     <arg name="world" default="$(find ship_painter)/worlds/ship.world"/>
-    
-    <!-- PX4 SITL 核心 -->
+    <arg name="sdf" default="$(find mavlink_sitl_gazebo)/models/iris_stereo_camera/iris_stereo_camera.sdf"/>
+
+    <!-- 船体模型参数（可配置） -->
+    <!-- 模型选择 - 可通过命令行参数覆盖，例如: roslaunch ship_painter boat.launch model_name:=test_ship -->
+    <arg name="model_name" default="target_ship" doc="Gazebo中模型的名称"/>
+    <arg name="model_stl" default="$(find ship_painter)/models/model4cube.stl" doc="STL文件路径（用于几何边界计算）"/>
+    <arg name="model_sdf" default="$(find ship_painter)/models/model4cube.sdf" doc="SDF文件路径（用于Gazebo生成）"/>
+
+    <!-- 路径规划基准距离 - 必须与boat2.launch中的path_offset_distance保持一致 -->
+    <arg name="path_offset_dist" default="5.0" doc="物体表面距离无人机起点的距离(米)"/>
+    <arg name="spray_dist" default="0.5"/>
+
+    <!-- PX4 SITL 仿真核心 -->
+    <!-- 启动Gazebo、PX4固件、MAVROS通信 -->
     <include file="$(find px4)/launch/mavros_posix_sitl.launch">
         <arg name="est" value="$(arg est)"/>
         <arg name="vehicle" value="$(arg vehicle)"/>
         <arg name="world" value="$(arg world)"/>
+        <arg name="sdf" value="$(arg sdf)"/>
     </include>
-    
-    <!-- 定义船体模型位置参数（统一管理） -->
-    <arg name="ship_x" default="4.08"/>
-    <arg name="ship_y" default="8"/>
-    <arg name="ship_z" default="0.125"/>
-    
-    <!-- 生成船体模型 -->
-    <node name="spawn_ship" pkg="gazebo_ros" type="spawn_model" 
-          args="-sdf -file $(find ship_painter)/models/model4cube.sdf -model boat1 
-                -x $(arg ship_x) 
-                -y $(arg ship_y) 
-                -z $(arg ship_z)" 
-          launch-prefix="bash -c 'sleep 5; $0 $@' " 
-          output="screen">
-        <!-- 输出生成位置信息 -->
-        <param name="model_x" value="$(arg ship_x)"/>
-        <param name="model_y" value="$(arg ship_y)"/>
-        <param name="model_z" value="$(arg ship_z)"/>
+
+    <!-- 自动对齐船体-->
+    <!--
+      1. 读取STL文件计算几何边界盒 (min_x, max_x, min_y, max_y, min_z, max_z)
+      2. 自动计算Gazebo spawn坐标，确保:
+         - X轴: 物体表面最近点在 X = path_offset_dist + pray_dist
+         - Y轴: 物体几何中心对齐 Y = 0 (无人机正前方)
+         - Z轴: 物体底部直接放在地面 Z = 0
+      3. 生成模型到Gazebo并上传参数到ROS参数服务器
+    -->
+    <node name="auto_spawner" pkg="ship_painter" type="auto_spawn_model.py" output="screen">
+        <param name="stl_path" value="$(arg model_stl)"/>
+        <param name="sdf_path" value="$(arg model_sdf)"/>
+        <param name="model_name" value="$(arg model_name)"/>
+        <param name="path_offset_distance" value="$(eval arg('path_offset_dist') + arg('spray_dist'))"/>
     </node>
-    
-    <!-- 将模型位置保存到参数服务器，供其他节点使用 -->
-    <param name="/ship_model/x" value="$(arg ship_x)"/>
-    <param name="/ship_model/y" value="$(arg ship_y)"/>
-    <param name="/ship_model/z" value="$(arg ship_z)"/>
-    
+
+    <!-- PX4 EKF2 Vision Parameters Configuration -->
+    <!--
+    This script configures PX4's EKF2 to fuse vision data from VINS-Fusion
+    Enables position, velocity, and yaw fusion for vision-aided navigation
+    Uses Python script with MAVROS services for more reliable parameter setting
+    -->
+    <node name="set_px4_vision_params" pkg="ship_painter" type="set_px4_vision_params.py"
+          launch-prefix="bash -c 'sleep 10; $0 $@' "
+          output="screen"/>
+    <!--
+    视觉融合验证:
+      rostopic echo /mavros/vision_pose/pose             # 检查VINS数据是否到达MAVROS
+      rostopic echo /mavros/local_position/pose          # 检查PX4融合后的位置估计
+      rosrun mavros mavparam get EKF2_EV_CTRL            # 确认参数已设置
+
+    使用其他模型示例:
+      roslaunch ship_painter boat.launch \
+        model_name:=test_ship \
+        model_stl:=$(find ship_painter)/models/test.stl \
+        model_sdf:=$(find ship_painter)/models/test.sdf \
+        path_offset_dist:=3.0
+    -->
+
 </launch>

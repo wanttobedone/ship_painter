@@ -122,7 +122,7 @@
     <!--/group-->
     
     <!-- 启动 RViz 可视化 -->
-    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find ship_painter)/rviz/ship_painter.rviz"/>
+    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find ship_painter)/rviz/ship_painter_VINS.rviz"/>
     
     <!-- TF变换：world到map -->
     <node pkg="tf" type="static_transform_publisher" name="world_to_map" 

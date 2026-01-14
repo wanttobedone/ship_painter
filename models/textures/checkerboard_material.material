@@ -1,0 +1,43 @@
+// ================================================================
+// 棋盘格纹理材质定义 - Ogre3D Material Script
+// 功能: 为Gazebo模型定义黑白棋盘格纹理材质
+// 用途: VINS-Fusion视觉特征提取
+// 创建时间: 2026-01-13
+// ================================================================
+
+material Checkerboard/Pattern
+{
+    technique
+    {
+        pass
+        {
+            // 环境光反射
+            ambient 1.0 1.0 1.0 1.0
+
+            // 漫反射（主要光照效果）
+            diffuse 1.0 1.0 1.0 1.0
+
+            // 镜面反射（高光）
+            specular 0.1 0.1 0.1 1.0 12.5
+
+            // 自发光（无）
+            emissive 0.0 0.0 0.0 0.0
+
+            // 纹理单元
+            texture_unit
+            {
+                // 纹理文件路径（相对于models目录）
+                texture checkerboard_15cm.png
+
+                // 纹理过滤模式（三线性过滤，提高远距离显示质量）
+                filtering trilinear
+
+                // 纹理坐标生成模式（使用模型的UV坐标）
+                tex_address_mode wrap
+
+                // 纹理颜色操作（调制模式，混合材质颜色和纹理颜色）
+                colour_op modulate
+            }
+        }
+    }
+}

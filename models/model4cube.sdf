@@ -13,14 +13,26 @@
             <scale>1.0 1.0 1.0</scale>
           </mesh>
         </geometry>
+        <!-- 棋盘格纹理材质 - 为VINS提供丰富特征点 -->
+        <material>
+          <ambient>1 1 1 1</ambient>
+          <diffuse>1 1 1 1</diffuse>
+          <specular>0.1 0.1 0.1 1</specular>
+          <emissive>0 0 0 0</emissive>
+          <script>
+            <uri>model://textures/checkerboard_material.material</uri>
+            <name>Checkerboard/Pattern</name>
+          </script>
+        </material>
       </visual>
       
-      <!-- 碰撞几何体 -->
+      <!-- 碰撞几何体 - 修改为与视觉模型一致的mesh，防止深度相机穿模 -->
       <collision name="collision">
         <geometry>
-          <box>
-            <size>0.05 0.05 0.05</size>
-          </box>
+          <mesh>
+            <uri>model://model4cube.dae</uri>
+            <scale>1.0 1.0 1.0</scale>
+          </mesh>
         </geometry>
       </collision>
       

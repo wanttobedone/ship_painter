@@ -1,75 +1,25 @@
 <?xml version="1.0"?>
 <sdf version="1.7">
-  <world name="ship_world">
-    <!-- 基本环境 -->
+  <world name="ship_world_vins">
+    <!-- ================================================================
+         VINS优化版船体喷涂仿真世界
+         功能: 提供纹理丰富的环境用于VINS-Fusion特征提取
+         特点: 12个纹理物体分布在10.0-20.0米范围
+         生成时间: 2026-01-13
+         ================================================================ -->
+
+    <!-- ==================== 基础环境 ==================== -->
+    <!-- 太阳光源 -->
     <include>
       <uri>model://sun</uri>
     </include>
+
+    <!-- 地面 -->
     <include>
       <uri>model://ground_plane</uri>
     </include>
 
-    <!-- 纹理丰富的物体 for VINS feature extraction -->
-    <!-- Bookshelf 1 -->
-    <include>
-      <uri>model://bookshelf</uri>
-      <pose>5 3 0 0 0 0</pose>
-      <name>bookshelf_1</name>
-    </include>
-
-    <!-- Bookshelf 2 -->
-    <include>
-      <uri>model://bookshelf</uri>
-      <pose>5 -3 0 0 0 1.57</pose>
-      <name>bookshelf_2</name>
-    </include>
-
-    <!-- Construction Barrel -->
-    <include>
-      <uri>model://construction_barrel</uri>
-      <pose>3 0 0 0 0 0</pose>
-      <name>barrel_1</name>
-    </include>
-
-    <!-- Dumpster -->
-    <include>
-      <uri>model://dumpster</uri>
-      <pose>7 0 0 0 0 0</pose>
-      <name>dumpster_1</name>
-    </include>
-
-    <!-- Jersey Barrier -->
-    <include>
-      <uri>model://jersey_barrier</uri>
-      <pose>1 4 0 0 0 0</pose>
-      <name>barrier_1</name>
-    </include>
-
-    <!-- Cinder Block Wall for rich texture -->
-    <include>
-      <uri>model://cinder_block</uri>
-      <pose>0 5 0.2 0 0 0</pose>
-      <name>cinder_1</name>
-    </include>
-    <include>
-      <uri>model://cinder_block</uri>
-      <pose>0.4 5 0.2 0 0 0</pose>
-      <name>cinder_2</name>
-    </include>
-    <include>
-      <uri>model://cinder_block</uri>
-      <pose>0.8 5 0.2 0 0 0</pose>
-      <name>cinder_3</name>
-    </include>
-
-    <!-- Brick Box -->
-    <include>
-      <uri>model://brick_box_3x1x3</uri>
-      <pose>-3 2 0 0 0 0</pose>
-      <name>brick_box_1</name>
-    </include>
-
-    <!-- 光照 -->
+    <!-- ==================== 光照设置 ==================== -->
     <light type="directional" name="sunlight">
       <cast_shadows>true</cast_shadows>
       <pose>0 0 10 0 0 0</pose>
@@ -83,32 +33,134 @@
       </attenuation>
       <direction>-0.5 0.1 -0.9</direction>
     </light>
-    
-    <!-- 物理引擎参数 -->
+
+    <!-- 额外的环境光（增强纹理可见性） -->
+    <light type="ambient" name="ambient_light">
+      <color>0.4 0.4 0.4 1</color>
+    </light>
+
+    <!-- ==================== VINS纹理特征物体 ==================== -->
+    <!-- 目的: 提供丰富的视觉特征，分布在10-20米范围，防止干扰无人机起飞 -->
+
+    <!-- 特征物体 vins_feature_1 -->
+    <include>
+      <uri>model://bookshelf</uri>
+      <name>vins_feature_1</name>
+      <pose>10.222806 0.747631 0.000000 0 0 1.402474</pose>
+      <static>true</static>
+    </include>
+
+    <!-- 特征物体 vins_feature_2 -->
+    <include>
+      <uri>model://construction_barrel</uri>
+      <name>vins_feature_2</name>
+      <pose>13.374121 10.112617 0.891225 0 0 2.651013</pose>
+      <static>true</static>
+    </include>
+
+    <!-- 特征物体 vins_feature_3 -->
+    <include>
+      <uri>model://dumpster</uri>
+      <name>vins_feature_3</name>
+      <pose>8.481587 8.750459 0.000000 0 0 0.166730</pose>
+      <static>true</static>
+    </include>
+
+    <!-- 特征物体 vins_feature_4 -->
+    <include>
+      <uri>model://jersey_barrier</uri>
+      <name>vins_feature_4</name>
+      <pose>2.590905 16.294142 0.000000 0 0 1.385069</pose>
+      <static>true</static>
+    </include>
+
+    <!-- 特征物体 vins_feature_5 -->
+    <include>
+      <uri>model://cinder_block</uri>
+      <name>vins_feature_5</name>
+      <pose>-9.769418 15.230310 0.000000 0 0 5.063112</pose>
+      <static>true</static>
+    </include>
+
+    <!-- 特征物体 vins_feature_6 -->
+    <include>
+      <uri>model://brick_box_3x1x3</uri>
+      <name>vins_feature_6</name>
+      <pose>-12.238481 5.463215 0.000000 0 0 6.014347</pose>
+      <static>true</static>
+    </include>
+
+    <!-- 特征物体 vins_feature_7 -->
+    <include>
+      <uri>model://bookshelf</uri>
+      <name>vins_feature_7</name>
+      <pose>-10.887487 0.933801 0.000000 0 0 5.324964</pose>
+      <static>true</static>
+    </include>
+
+    <!-- 特征物体 vins_feature_8 -->
+    <include>
+      <uri>model://construction_barrel</uri>
+      <name>vins_feature_8</name>
+      <pose>-15.136622 -9.871875 2.913026 0 0 6.114267</pose>
+      <static>true</static>
+    </include>
+
+    <!-- 特征物体 vins_feature_9 -->
+    <include>
+      <uri>model://dumpster</uri>
+      <name>vins_feature_9</name>
+      <pose>-8.598780 -12.920681 3.283339 0 0 5.414264</pose>
+      <static>true</static>
+    </include>
+
+    <!-- 特征物体 vins_feature_10 -->
+    <include>
+      <uri>model://jersey_barrier</uri>
+      <name>vins_feature_10</name>
+      <pose>0.690188 -17.031740 0.000000 0 0 1.431927</pose>
+      <static>true</static>
+    </include>
+
+    <!-- 特征物体 vins_feature_11 -->
+    <include>
+      <uri>model://cinder_block</uri>
+      <name>vins_feature_11</name>
+      <pose>4.337031 -9.888642 0.000000 0 0 0.634611</pose>
+      <static>true</static>
+    </include>
+
+    <!-- 特征物体 vins_feature_12 -->
+    <include>
+      <uri>model://brick_box_3x1x3</uri>
+      <name>vins_feature_12</name>
+      <pose>13.121206 -9.766285 0.000000 0 0 2.325916</pose>
+      <static>true</static>
+    </include>
+
+    <!-- ==================== 物理引擎配置 ==================== -->
     <physics type="ode">
       <max_step_size>0.002</max_step_size>
       <real_time_factor>1</real_time_factor>
       <real_time_update_rate>500</real_time_update_rate>
+      <gravity>0 0 -9.81</gravity>
     </physics>
 
- <!--<plugin name='wind_plugin' filename='libgazebo_wind_plugin.so'>
-  <frameId>base_link</frameId>
-  <robotNamespace/>
+    <!-- ==================== GUI设置 ==================== -->
+    <gui>
+      <camera name="user_camera">
+        <pose>-10 0 15 0 0.5 0</pose>
+        <view_controller>orbit</view_controller>
+      </camera>
+    </gui>
 
-  <windDirectionMean>0 1 0</windDirectionMean>
-
-  <windVelocityMean>0.0</windVelocityMean>
-
-  <windGustVelocityMax>25.0</windGustVelocityMax>
-
-  <windGustStart>50.0</windGustStart>
-
-  <windGustDuration>10.0</windGustDuration>
-
-  <windGustDirectionMean>0 1 0</windGustDirectionMean>
-  
-  <windPubTopic>world_wind</windPubTopic>
-</plugin>-->
+    <!-- ==================== 场景设置 ==================== -->
+    <scene>
+      <ambient>0.4 0.4 0.4 1</ambient>
+      <background>0.7 0.8 1.0 1</background>
+      <shadows>1</shadows>
+      <grid>true</grid>
+    </scene>
 
   </world>
 </sdf>
