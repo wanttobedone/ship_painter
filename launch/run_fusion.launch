@@ -1,5 +1,5 @@
 <launch>
-    <arg name="config_path" default="/home/ncu/catkin_ws/src/VINS-Fusion/config/simulation/simulation_config.yaml" />
+    <arg name="config_path" default="/home/ncu/catkin_ws/src/ship_painter/VINS-Fusion/config/simulation/simulation_config.yaml" />
 
     <!-- VINS-Fusion Estimator -->
     <node name="vins_estimator" pkg="vins" type="vins_node" output="screen"
