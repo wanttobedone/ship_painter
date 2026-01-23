@@ -241,6 +241,95 @@ target_link_libraries(trajectory_server_node
 )
 add_dependencies(trajectory_server_node ${PROJECT_NAME}_generate_messages_cpp)
 
+# =============================================================================
+# === Acados MPC Runner Node ===
+# =============================================================================
+# 说明: 此节点需要先运行 mpc_gen/generate_mpc.py 生成C代码
+# 然后将 c_generated_code 复制到 src/mpc/ 目录
+
+# Acados安装路径 (从环境变量或默认路径)
+# 注意: CMake不会展开~，所以使用$ENV{HOME}
+if(DEFINED ENV{ACADOS_SOURCE_DIR})
+    # 如果设置了环境变量，使用它（但要处理~的情况）
+    string(REPLACE "~" "$ENV{HOME}" ACADOS_SOURCE_DIR "$ENV{ACADOS_SOURCE_DIR}")
+else()
+    set(ACADOS_SOURCE_DIR "$ENV{HOME}/acados")
+endif()
+
+set(ACADOS_INCLUDE_DIR ${ACADOS_SOURCE_DIR}/include)
+set(ACADOS_LIB_DIR ${ACADOS_SOURCE_DIR}/lib)
+
+# MPC生成代码目录
+set(MPC_GEN_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/mpc/c_generated_code)
+
+# 检查Acados是否存在
+if(EXISTS ${ACADOS_INCLUDE_DIR}/acados AND EXISTS ${MPC_GEN_DIR})
+    message(STATUS "=== Acados MPC Configuration ===")
+    message(STATUS "  Acados source: ${ACADOS_SOURCE_DIR}")
+    message(STATUS "  MPC generated code: ${MPC_GEN_DIR}")
+
+    # 查找MPC生成的源文件 (包括所有子目录)
+    # 注意: 排除 main_*.c 文件，这些是Acados生成的测试文件
+    file(GLOB MPC_GENERATED_SOURCES
+        ${MPC_GEN_DIR}/acados_solver_*.c
+        ${MPC_GEN_DIR}/acados_sim_solver_*.c
+        ${MPC_GEN_DIR}/ship_painter_mpc_model/*.c
+        ${MPC_GEN_DIR}/ship_painter_mpc_cost/*.c
+    )
+
+    if(MPC_GENERATED_SOURCES)
+        message(STATUS "  Found MPC sources: ${MPC_GENERATED_SOURCES}")
+
+        # 创建MPC Runner节点
+        add_executable(mpc_runner_node
+            src/mpc_runner_node.cpp
+            ${MPC_GENERATED_SOURCES}
+        )
+
+        target_include_directories(mpc_runner_node PRIVATE
+            ${ACADOS_INCLUDE_DIR}
+            ${ACADOS_INCLUDE_DIR}/acados
+            ${ACADOS_INCLUDE_DIR}/blasfeo/include
+            ${ACADOS_INCLUDE_DIR}/hpipm/include
+            ${MPC_GEN_DIR}
+        )
+
+        target_link_libraries(mpc_runner_node
+            ${catkin_LIBRARIES}
+            bspline
+            Eigen3::Eigen
+            ${ACADOS_LIB_DIR}/libacados.so
+            ${ACADOS_LIB_DIR}/libhpipm.so
+            ${ACADOS_LIB_DIR}/libblasfeo.so
+            m  # math library
+        )
+
+        add_dependencies(mpc_runner_node ${PROJECT_NAME}_generate_messages_cpp)
+
+        set_target_properties(mpc_runner_node PROPERTIES
+            CXX_STANDARD 17
+            CXX_STANDARD_REQUIRED ON
+        )
+
+        message(STATUS "  MPC Runner node configured successfully!")
+    else()
+        message(WARNING "MPC generated sources not found in ${MPC_GEN_DIR}")
+        message(WARNING "Please run: cd mpc_gen && python3 generate_mpc.py")
+        message(WARNING "Then copy: cp -r c_generated_code ../src/mpc/")
+    endif()
+else()
+    message(STATUS "=== Acados MPC Not Configured ===")
+    if(NOT EXISTS ${ACADOS_INCLUDE_DIR}/acados)
+        message(STATUS "  Acados not found at: ${ACADOS_SOURCE_DIR}")
+        message(STATUS "  To install Acados, see: https://docs.acados.org/installation/")
+    endif()
+    if(NOT EXISTS ${MPC_GEN_DIR})
+        message(STATUS "  MPC generated code not found at: ${MPC_GEN_DIR}")
+        message(STATUS "  Please run: cd mpc_gen && python3 generate_mpc.py")
+    endif()
+endif()
+# =============================================================================
+
 # === 构建主节点 ===
 add_executable(ship_painter_node 
   src/ship_painter_node.cpp

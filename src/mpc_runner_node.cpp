@@ -1,0 +1,570 @@
+/**
+ * @file mpc_runner_node.cpp
+ * @brief MPC-based trajectory tracking controller for Ship Painter UAV
+ *
+ * 功能说明:
+ * - 替代trajectory_server_node，使用NMPC进行轨迹跟踪
+ * - 输入: B-Spline轨迹、无人机状态
+ * - 输出: 推力+角速度指令 (AttitudeTarget)
+ *
+ * 关键特性:
+ * - 完整的Yaw控制（从法向量计算）
+ * - 四元数半球一致性检查
+ * - atan2奇异点保护
+ * - 求解失败时的安全悬停
+ *
+ * @author Claude Code Assistant
+ * @date 2024
+ */
+
+#include <ros/ros.h>
+#include <nav_msgs/Odometry.h>
+#include <geometry_msgs/PoseStamped.h>
+#include <mavros_msgs/AttitudeTarget.h>
+#include <visualization_msgs/Marker.h>
+#include <std_msgs/Bool.h>
+
+// B-Spline相关
+#include "ship_painter/Bspline.h"
+#include "ship_painter/BsplineLayer.h"
+#include "ship_painter/bspline.h"
+
+// Eigen
+#include <Eigen/Dense>
+#include <Eigen/Geometry>
+
+// Acados生成的求解器头文件
+// 注意: 这些文件由generate_mpc.py生成
+extern "C" {
+#include "acados_solver_ship_painter_mpc.h"
+#include "acados_sim_solver_ship_painter_mpc.h"
+}
+
+#include <cmath>
+#include <algorithm>
+
+class MPCRunner {
+public:
+    MPCRunner();
+    ~MPCRunner();
+
+private:
+    // ===== ROS接口 =====
+    ros::NodeHandle nh_;
+    ros::Subscriber odom_sub_;
+    ros::Subscriber bspline_sub_;
+    ros::Publisher ctrl_pub_;
+    ros::Publisher pred_traj_pub_;      // 预测轨迹可视化
+    ros::Timer control_timer_;
+
+    // ===== Acados求解器 =====
+    ship_painter_mpc_solver_capsule* acados_capsule_;
+    bool solver_initialized_;
+
+    // ===== MPC参数 (与generate_mpc.py保持一致!) =====
+    static constexpr int NX_ = 10;      // 状态维度
+    static constexpr int NU_ = 4;       // 控制维度
+    static constexpr int N_HORIZON_ = 20;  // 预测步数
+    static constexpr double T_HORIZON_ = 1.0;  // 预测时域
+    static constexpr double DT_ = T_HORIZON_ / N_HORIZON_;  // 每步时长
+
+    // 推力参数 (必须与generate_mpc.py一致!)
+    double T_MAX_;
+    double T_MIN_;
+    double T_HOVER_;
+    double MASS_;
+
+    // ===== 状态变量 =====
+    Eigen::Matrix<double, NX_, 1> current_state_;
+    bool odom_received_;
+
+    // 轨迹
+    std::vector<ship_painter::BSpline> layers_;
+    std::vector<ship_painter::BSpline> transitions_;
+    size_t current_layer_idx_;
+    bool trajectory_active_;
+    ros::Time trajectory_start_time_;
+    std::vector<double> layer_end_times_;
+
+    // Yaw奇异点保护
+    double last_valid_yaw_;
+    static constexpr double YAW_SINGULARITY_THRESHOLD_ = 0.1;  // 法向量xy分量阈值
+
+    // 统计信息
+    int solve_success_count_;
+    int solve_fail_count_;
+    ros::Time last_status_print_;
+
+    // ===== 回调函数 =====
+    void odomCallback(const nav_msgs::Odometry::ConstPtr& msg);
+    void bsplineCallback(const ship_painter::BsplineLayer::ConstPtr& msg);
+    void controlLoop(const ros::TimerEvent& event);
+
+    // ===== 辅助函数 =====
+    void loadParameters();
+    bool initSolver();
+    void publishHoverCommand();
+    void publishPredictedTrajectory(const std::vector<Eigen::Vector3d>& positions);
+
+    /**
+     * @brief 从法向量计算Yaw角，带奇异点保护
+     * @param normal 表面法向量
+     * @return Yaw角 (rad)
+     */
+    double computeYawFromNormal(const Eigen::Vector3d& normal);
+
+    /**
+     * @brief 四元数半球一致性检查
+     * @param q_ref 参考四元数
+     * @param q_current 当前四元数
+     * @return 调整后的参考四元数（与当前在同一半球）
+     */
+    Eigen::Quaterniond ensureQuaternionHemisphere(
+        const Eigen::Quaterniond& q_ref,
+        const Eigen::Quaterniond& q_current);
+};
+
+// ===== 构造函数 =====
+MPCRunner::MPCRunner()
+    : nh_("~"),
+      acados_capsule_(nullptr),
+      solver_initialized_(false),
+      odom_received_(false),
+      current_layer_idx_(0),
+      trajectory_active_(false),
+      last_valid_yaw_(0.0),
+      solve_success_count_(0),
+      solve_fail_count_(0)
+{
+    // 初始化状态为零（四元数w=1）
+    current_state_.setZero();
+    current_state_(3) = 1.0;  // qw = 1
+
+    // 加载参数
+    loadParameters();
+
+    // 初始化求解器
+    if (!initSolver()) {
+        ROS_FATAL("Failed to initialize Acados solver!");
+        ros::shutdown();
+        return;
+    }
+
+    // 获取mavros命名空间
+    std::string mavros_ns;
+    nh_.param<std::string>("mavros_ns", mavros_ns, "/mavros");
+
+    // ===== 订阅者 =====
+    // 使用odom获取完整的位置+速度信息
+    odom_sub_ = nh_.subscribe(mavros_ns + "/local_position/odom", 1,
+        &MPCRunner::odomCallback, this);
+
+    // B-Spline轨迹
+    bspline_sub_ = nh_.subscribe("/planning/bspline_layers", 1,
+        &MPCRunner::bsplineCallback, this);
+
+    // ===== 发布者 =====
+    // AttitudeTarget: 发送推力+角速度
+    ctrl_pub_ = nh_.advertise<mavros_msgs::AttitudeTarget>(
+        mavros_ns + "/setpoint_raw/attitude", 1);
+
+    // 预测轨迹可视化
+    pred_traj_pub_ = nh_.advertise<visualization_msgs::Marker>(
+        "/mpc/predicted_trajectory", 1);
+
+    // ===== 控制定时器 =====
+    // 50Hz控制频率 (与MPC步长匹配: dt = 0.05s = 50Hz)
+    double control_rate;
+    nh_.param<double>("control_rate", control_rate, 50.0);
+    control_timer_ = nh_.createTimer(
+        ros::Duration(1.0 / control_rate),
+        &MPCRunner::controlLoop, this);
+
+    last_status_print_ = ros::Time::now();
+
+    ROS_INFO("==============================================");
+    ROS_INFO("MPC Runner Node Initialized");
+    ROS_INFO("  MAVROS namespace: %s", mavros_ns.c_str());
+    ROS_INFO("  Control rate: %.1f Hz", control_rate);
+    ROS_INFO("  Mass: %.2f kg, T_hover: %.2f N", MASS_, T_HOVER_);
+    ROS_INFO("  Thrust range: [%.1f, %.1f] N", T_MIN_, T_MAX_);
+    ROS_INFO("  MPC horizon: %.2f s, %d steps", T_HORIZON_, N_HORIZON_);
+    ROS_INFO("==============================================");
+}
+
+// ===== 析构函数 =====
+MPCRunner::~MPCRunner() {
+    if (acados_capsule_ != nullptr) {
+        ship_painter_mpc_acados_free(acados_capsule_);
+        ship_painter_mpc_acados_free_capsule(acados_capsule_);
+    }
+    ROS_INFO("MPC Runner shutdown. Solve stats: %d success, %d fail",
+             solve_success_count_, solve_fail_count_);
+}
+
+// ===== 加载参数 =====
+void MPCRunner::loadParameters() {
+    // 物理参数 (必须与generate_mpc.py一致!)
+    nh_.param<double>("mass", MASS_, 1.5);
+    nh_.param<double>("thrust_max", T_MAX_, 27.0);
+    nh_.param<double>("thrust_min", T_MIN_, 2.0);
+
+    T_HOVER_ = MASS_ * 9.81;
+}
+
+// ===== 初始化Acados求解器 =====
+bool MPCRunner::initSolver() {
+    acados_capsule_ = ship_painter_mpc_acados_create_capsule();
+    if (acados_capsule_ == nullptr) {
+        ROS_ERROR("Failed to create Acados capsule");
+        return false;
+    }
+
+    int status = ship_painter_mpc_acados_create(acados_capsule_);
+    if (status != 0) {
+        ROS_ERROR("Failed to create Acados solver, status: %d", status);
+        return false;
+    }
+
+    solver_initialized_ = true;
+    ROS_INFO("Acados solver initialized successfully");
+    return true;
+}
+
+// ===== Odometry回调 =====
+void MPCRunner::odomCallback(const nav_msgs::Odometry::ConstPtr& msg) {
+    // 位置
+    current_state_(0) = msg->pose.pose.position.x;
+    current_state_(1) = msg->pose.pose.position.y;
+    current_state_(2) = msg->pose.pose.position.z;
+
+    // 四元数 (注意顺序: w, x, y, z)
+    current_state_(3) = msg->pose.pose.orientation.w;
+    current_state_(4) = msg->pose.pose.orientation.x;
+    current_state_(5) = msg->pose.pose.orientation.y;
+    current_state_(6) = msg->pose.pose.orientation.z;
+
+    // 速度 (世界坐标系)
+    current_state_(7) = msg->twist.twist.linear.x;
+    current_state_(8) = msg->twist.twist.linear.y;
+    current_state_(9) = msg->twist.twist.linear.z;
+
+    odom_received_ = true;
+}
+
+// ===== B-Spline轨迹回调 =====
+void MPCRunner::bsplineCallback(const ship_painter::BsplineLayer::ConstPtr& msg) {
+    layers_.clear();
+
+    for (const auto& layer_msg : msg->layers) {
+        ship_painter::BSpline bspline;
+
+        std::vector<Eigen::Vector3d> control_points;
+        std::vector<Eigen::Vector3d> normals;
+
+        for (const auto& pt : layer_msg.pos_pts) {
+            control_points.push_back(Eigen::Vector3d(pt.x, pt.y, pt.z));
+        }
+
+        for (const auto& n : layer_msg.normals) {
+            normals.push_back(Eigen::Vector3d(n.x, n.y, n.z));
+        }
+
+        bspline.setDegree(layer_msg.order);
+        if (!layer_msg.knots.empty()) {
+            bspline.setKnots(layer_msg.knots);
+        }
+        bspline.setControlPoints(control_points);
+        bspline.setNormals(normals);
+        bspline.setTotalTime(layer_msg.duration);
+
+        layers_.push_back(bspline);
+    }
+
+    layer_end_times_ = msg->layer_end_times;
+
+    // 启动轨迹跟踪
+    trajectory_active_ = true;
+    trajectory_start_time_ = ros::Time::now();
+    current_layer_idx_ = 0;
+
+    ROS_INFO("MPC Runner: Loaded %zu trajectory layers", layers_.size());
+}
+
+// ===== 从法向量计算Yaw角（带奇异点保护）=====
+double MPCRunner::computeYawFromNormal(const Eigen::Vector3d& normal) {
+    // 喷涂方向 = 法向量取反（朝向表面）
+    Eigen::Vector3d spray_dir = -normal;
+
+    // 奇异点保护: 当法向量接近垂直时（水平甲板场景）
+    // spray_dir.x() 和 spray_dir.y() 接近0，atan2不稳定
+    if (std::abs(spray_dir.x()) < YAW_SINGULARITY_THRESHOLD_ &&
+        std::abs(spray_dir.y()) < YAW_SINGULARITY_THRESHOLD_) {
+        // 保持上一帧的yaw，防止机头乱转
+        ROS_DEBUG_THROTTLE(1.0, "Yaw singularity detected, using last valid yaw: %.2f rad",
+                          last_valid_yaw_);
+        return last_valid_yaw_;
+    }
+
+    // 正常计算yaw
+    double yaw = std::atan2(spray_dir.y(), spray_dir.x());
+    last_valid_yaw_ = yaw;  // 更新有效值
+    return yaw;
+}
+
+// ===== 四元数半球一致性检查 =====
+Eigen::Quaterniond MPCRunner::ensureQuaternionHemisphere(
+    const Eigen::Quaterniond& q_ref,
+    const Eigen::Quaterniond& q_current) {
+
+    // q 和 -q 表示相同的旋转
+    // 如果点积 < 0，说明在不同半球，需要翻转
+    if (q_ref.dot(q_current) < 0.0) {
+        return Eigen::Quaterniond(-q_ref.w(), -q_ref.x(), -q_ref.y(), -q_ref.z());
+    }
+    return q_ref;
+}
+
+// ===== 主控制循环 =====
+void MPCRunner::controlLoop(const ros::TimerEvent& event) {
+    // 检查前置条件
+    if (!solver_initialized_) {
+        ROS_WARN_THROTTLE(5, "MPC solver not initialized");
+        return;
+    }
+
+    if (!odom_received_) {
+        ROS_WARN_THROTTLE(5, "Waiting for odometry...");
+        return;
+    }
+
+    if (!trajectory_active_ || layers_.empty()) {
+        ROS_DEBUG_THROTTLE(5, "No active trajectory");
+        return;
+    }
+
+    // 计算当前时间
+    double t = (ros::Time::now() - trajectory_start_time_).toSec();
+
+    // 检查层切换
+    if (current_layer_idx_ < layers_.size()) {
+        const auto& current_traj = layers_[current_layer_idx_];
+
+        if (t > current_traj.getTotalTime()) {
+            current_layer_idx_++;
+            trajectory_start_time_ = ros::Time::now();
+            t = 0.0;
+
+            if (current_layer_idx_ >= layers_.size()) {
+                ROS_INFO_ONCE("All layers completed! Hovering...");
+                publishHoverCommand();
+                return;
+            }
+            ROS_INFO("Switched to layer %zu/%zu", current_layer_idx_ + 1, layers_.size());
+        }
+    }
+
+    const auto& traj = layers_[current_layer_idx_];
+    double total_time = traj.getTotalTime();
+
+    // 获取当前四元数用于半球检查
+    Eigen::Quaterniond q_current(
+        current_state_(3), current_state_(4),
+        current_state_(5), current_state_(6));
+
+    // ===== 设置MPC参考轨迹 =====
+    std::vector<Eigen::Vector3d> pred_positions;  // 用于可视化
+
+    for (int i = 0; i <= N_HORIZON_; i++) {
+        double t_pred = t + i * DT_;
+
+        // 确保不超出轨迹范围
+        if (t_pred > total_time) {
+            t_pred = total_time;
+        }
+
+        // 获取参考状态
+        Eigen::Vector3d p_ref = traj.getPosition(t_pred);
+        Eigen::Vector3d v_ref = traj.getVelocity(t_pred);
+        Eigen::Vector3d n_ref = traj.getNormal(t_pred);
+
+        pred_positions.push_back(p_ref);
+
+        // 计算Yaw角（带奇异点保护）
+        double yaw = computeYawFromNormal(n_ref);
+
+        // Yaw角转四元数（仅绕Z轴旋转）
+        Eigen::Quaterniond q_ref(Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()));
+
+        // 四元数半球一致性检查
+        q_ref = ensureQuaternionHemisphere(q_ref, q_current);
+
+        // 构建参考向量 y_ref = [p, q, v, u]
+        double y_ref[NX_ + NU_];
+
+        // 位置
+        y_ref[0] = p_ref.x();
+        y_ref[1] = p_ref.y();
+        y_ref[2] = p_ref.z();
+
+        // 四元数
+        y_ref[3] = q_ref.w();
+        y_ref[4] = q_ref.x();
+        y_ref[5] = q_ref.y();
+        y_ref[6] = q_ref.z();
+
+        // 速度
+        y_ref[7] = v_ref.x();
+        y_ref[8] = v_ref.y();
+        y_ref[9] = v_ref.z();
+
+        // 参考输入
+        y_ref[10] = T_HOVER_;  // 参考推力
+        y_ref[11] = 0.0;       // 参考角速度 (后续可添加前馈)
+        y_ref[12] = 0.0;
+        y_ref[13] = 0.0;
+
+        // 设置到求解器
+        if (i < N_HORIZON_) {
+            ocp_nlp_cost_model_set(acados_capsule_->nlp_config,
+                acados_capsule_->nlp_dims,
+                acados_capsule_->nlp_in,
+                i, "yref", y_ref);
+        } else {
+            // 终端参考（只有状态，无输入）
+            ocp_nlp_cost_model_set(acados_capsule_->nlp_config,
+                acados_capsule_->nlp_dims,
+                acados_capsule_->nlp_in,
+                i, "yref", y_ref);  // 终端会自动只取前NX_维
+        }
+    }
+
+    // ===== 设置初始状态约束 =====
+    ocp_nlp_constraints_model_set(acados_capsule_->nlp_config,
+        acados_capsule_->nlp_dims,
+        acados_capsule_->nlp_in,
+        acados_capsule_->nlp_out,  // 新版Acados API需要nlp_out参数
+        0, "lbx", current_state_.data());
+    ocp_nlp_constraints_model_set(acados_capsule_->nlp_config,
+        acados_capsule_->nlp_dims,
+        acados_capsule_->nlp_in,
+        acados_capsule_->nlp_out,  // 新版Acados API需要nlp_out参数
+        0, "ubx", current_state_.data());
+
+    // ===== 求解MPC =====
+    int status = ship_painter_mpc_acados_solve(acados_capsule_);
+
+    if (status != 0) {
+        solve_fail_count_++;
+        ROS_WARN_THROTTLE(1.0, "MPC solve failed! status=%d, publishing hover", status);
+        publishHoverCommand();
+        return;
+    }
+
+    solve_success_count_++;
+
+    // ===== 提取控制量 u0 = [T, wx, wy, wz] =====
+    double u0[NU_];
+    ocp_nlp_out_get(acados_capsule_->nlp_config,
+        acados_capsule_->nlp_dims,
+        acados_capsule_->nlp_out,
+        0, "u", u0);
+
+    // ===== 发布控制指令 =====
+    mavros_msgs::AttitudeTarget cmd;
+    cmd.header.stamp = ros::Time::now();
+    cmd.header.frame_id = "base_link";
+
+    // type_mask: 忽略姿态，使用角速度
+    // IGNORE_ROLL_RATE = 1, IGNORE_PITCH_RATE = 2, IGNORE_YAW_RATE = 4
+    // IGNORE_THRUST = 64, IGNORE_ATTITUDE = 128
+    cmd.type_mask = mavros_msgs::AttitudeTarget::IGNORE_ATTITUDE;  // = 128
+
+    // 推力归一化: throttle = T / T_max
+    double thrust_normalized = std::clamp(u0[0] / T_MAX_, 0.0, 1.0);
+    cmd.thrust = static_cast<float>(thrust_normalized);
+
+    // 角速度
+    cmd.body_rate.x = u0[1];
+    cmd.body_rate.y = u0[2];
+    cmd.body_rate.z = u0[3];  // Yaw rate!
+
+    ctrl_pub_.publish(cmd);
+
+    // 发布预测轨迹可视化
+    publishPredictedTrajectory(pred_positions);
+
+    // 定期打印状态
+    if ((ros::Time::now() - last_status_print_).toSec() > 2.0) {
+        Eigen::Vector3d p_ref = traj.getPosition(t);
+        Eigen::Vector3d p_cur(current_state_(0), current_state_(1), current_state_(2));
+        double pos_error = (p_ref - p_cur).norm();
+
+        ROS_INFO("[MPC] Layer %zu/%zu | t=%.1f/%.1f | err=%.3fm | T=%.1fN | wz=%.2f",
+                 current_layer_idx_ + 1, layers_.size(),
+                 t, total_time, pos_error,
+                 u0[0], u0[3]);
+        last_status_print_ = ros::Time::now();
+    }
+}
+
+// ===== 发布悬停指令 =====
+void MPCRunner::publishHoverCommand() {
+    mavros_msgs::AttitudeTarget cmd;
+    cmd.header.stamp = ros::Time::now();
+    cmd.type_mask = mavros_msgs::AttitudeTarget::IGNORE_ATTITUDE;
+
+    // 悬停推力
+    cmd.thrust = static_cast<float>(T_HOVER_ / T_MAX_);
+
+    // 零角速度
+    cmd.body_rate.x = 0.0;
+    cmd.body_rate.y = 0.0;
+    cmd.body_rate.z = 0.0;
+
+    ctrl_pub_.publish(cmd);
+}
+
+// ===== 发布预测轨迹可视化 =====
+void MPCRunner::publishPredictedTrajectory(const std::vector<Eigen::Vector3d>& positions) {
+    visualization_msgs::Marker marker;
+    marker.header.frame_id = "map";
+    marker.header.stamp = ros::Time::now();
+    marker.ns = "mpc_prediction";
+    marker.id = 0;
+    marker.type = visualization_msgs::Marker::LINE_STRIP;
+    marker.action = visualization_msgs::Marker::ADD;
+
+    marker.scale.x = 0.03;  // 线宽
+
+    // 蓝色表示预测
+    marker.color.r = 0.0;
+    marker.color.g = 0.5;
+    marker.color.b = 1.0;
+    marker.color.a = 0.8;
+
+    for (const auto& pos : positions) {
+        geometry_msgs::Point p;
+        p.x = pos.x();
+        p.y = pos.y();
+        p.z = pos.z();
+        marker.points.push_back(p);
+    }
+
+    pred_traj_pub_.publish(marker);
+}
+
+// ===== Main =====
+int main(int argc, char** argv) {
+    ros::init(argc, argv, "mpc_runner");
+
+    try {
+        MPCRunner runner;
+        ros::spin();
+    } catch (const std::exception& e) {
+        ROS_FATAL("MPC Runner exception: %s", e.what());
+        return 1;
+    }
+
+    return 0;
+}

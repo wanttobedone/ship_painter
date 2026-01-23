@@ -23,3 +23,5 @@ build/
 *.log
 
 scripts/
+
+claude.md

@@ -8,6 +8,7 @@ sleep 5
 # 2. 启动 MAVROS (连接飞控)
 # 注意：/dev/ttyACM0 是飞控的串口号，如果不通请检查 ls /dev/tty*
 # 921600 是 Pixhawk 4/6C 等飞控的常用波特率，如果是旧版可能是 57600
-roslaunch mavros px4.launch fcu_url:=/dev/ttyACM0:921600 gcs_url:=udp://@192.168.1.100
+roslaunch mavros px4.launch fcu_url:=/dev/ttyACM0:921600
+rosservice call /mavros/set_stream_rate 0 10 200 1
 
 wait
