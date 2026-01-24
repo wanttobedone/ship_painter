@@ -9,6 +9,7 @@ Panels:
         - /BSpline1
         - /BSpline1/Namespaces1
         - /BSpline_runned1
+        - /MPC Controller1
         - /VINS System1
       Splitter Ratio: 0.5
     Tree Height: 595
@@ -193,6 +194,58 @@ Visualization Manager:
         executed_trajectory: true
       Queue Size: 100
       Value: true
+    - Class: rviz/Group
+      Displays:
+        - Class: rviz/Marker
+          Enabled: true
+          Marker Topic: /mpc/predicted_trajectory
+          Name: MPC Predicted Trajectory
+          Namespaces:
+            mpc_prediction: true
+          Queue Size: 100
+          Value: true
+        - Alpha: 1
+          Axes Length: 0.3
+          Axes Radius: 0.05
+          Class: rviz/Pose
+          Color: 0; 255; 255
+          Enabled: true
+          Head Length: 0.15
+          Head Radius: 0.08
+          Name: Reference Pose
+          Queue Size: 10
+          Shaft Length: 0.3
+          Shaft Radius: 0.03
+          Shape: Arrow
+          Topic: /mpc/reference_pose
+          Unreliable: false
+          Value: true
+        - Alpha: 1
+          Buffer Length: 1
+          Class: rviz/Path
+          Color: 255; 255; 0
+          Enabled: true
+          Head Diameter: 0.30000001192092896
+          Head Length: 0.20000000298023224
+          Length: 0.30000001192092896
+          Line Style: Lines
+          Line Width: 0.05000000074505806
+          Name: Actual Flight Path
+          Offset:
+            X: 0
+            Y: 0
+            Z: 0
+          Pose Color: 255; 85; 255
+          Pose Style: None
+          Queue Size: 10
+          Radius: 0.029999999329447746
+          Shaft Diameter: 0.10000000149011612
+          Shaft Length: 0.10000000149011612
+          Topic: /mpc/actual_path
+          Unreliable: false
+          Value: true
+      Enabled: true
+      Name: MPC Controller
     - Class: rviz/Group
       Displays:
         - Class: rviz/Odometry

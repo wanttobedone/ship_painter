@@ -91,12 +91,24 @@
         <param name="mavros_ns" value="$(arg mavros_ns)" />
 
         <!-- MPC物理参数 (必须与generate_mpc.py一致) -->
-        <param name="mass" value="1.5" type="double"/>
-        <param name="thrust_max" value="27.0" type="double"/>
-        <param name="thrust_min" value="2.0" type="double"/>
+        <!-- 注意: 使用比力(specific thrust = 加速度 m/s²), 不是力(N)! -->
+        <!-- 悬停时 T = g ≈ 9.8 m/s² -->
+        <param name="mass" value="1.5" type="double"/>  <!-- 仅用于日志显示 -->
+        <param name="thrust_max" value="20.0" type="double"/>  <!-- 最大比力 ≈ 2g m/s² -->
+        <param name="thrust_min" value="2.0" type="double"/>   <!-- 最小比力 ≈ 0.2g m/s² -->
 
         <!-- 控制频率 (Hz) -->
-        <param name="control_rate" value="50.0" type="double"/>
+        <!-- 建议: 50-100Hz, 与PX4内环匹配更好 -->
+        <param name="control_rate" value="100.0" type="double"/>
+
+        <!-- Yaw控制参数 -->
+        <param name="yaw_kp" value="2.0" type="double"/>       <!-- Yaw比例增益 -->
+        <param name="yaw_kd" value="0.1" type="double"/>       <!-- Yaw微分增益 -->
+        <param name="max_yaw_rate" value="1.5" type="double"/> <!-- 最大yaw角速度 rad/s -->
+
+        <!-- 控制输出滤波 -->
+        <!-- alpha=1.0 无滤波, alpha=0.3 强滤波 -->
+        <param name="filter_alpha" value="0.6" type="double"/>
 
     </node>
 

@@ -9,36 +9,39 @@ Ship Painter MPC Solver Generator
 - 4维控制输入: [Thrust, wx, wy, wz]
 - 包含完整的姿态(Yaw)跟踪
 - 使用NONLINEAR_LS代价函数（适合四元数）
+- 使用ENU坐标系（与ROS/MAVROS一致）
+
+坐标系约定:
+- ENU (East-North-Up): X向东, Y向北, Z向上
+- 重力: [0, 0, -9.81] (向下)
+- 推力: [0, 0, +T] 在机体坐标系中向上
 
 使用方法:
 1. 根据实际无人机修改下方参数区
 2. 运行: python3 generate_mpc.py
 3. 将c_generated_code复制到ship_painter/src/mpc/
 
-作者: Claude Code Assistant
-日期: 2024
 """
 
-# ===== 依赖导入 =====
 from acados_template import AcadosOcp, AcadosModel, AcadosOcpSolver
 from casadi import SX, vertcat, mtimes
 import numpy as np
 from scipy.linalg import block_diag
 import os
 
-# ===============================================================
-# 参数设置区 - 工程师请根据实际无人机修改这里
-# ===============================================================
+
+# 参数设置根据实际无人机修改这里
 
 # 物理参数
-MASS = 1.5              # 无人机质量 (kg) - 从SDF文件获取
-G_VAL = 9.81            # 重力加速度 (m/s^2)
+# 注意: 推力使用比力(specific thrust = 加速度 m/s²), 不是力(N)!
+# 这与rpg_mpc保持一致
+G_VAL = 9.8066          # 重力加速度 (m/s^2)
 
-# 推力限制
-# T_MAX = m * g / hover_throttle, 例如: 1.5*9.81/0.55 ≈ 26.75N
-T_MAX = 27.0            # 最大推力 (N)
-T_MIN = 2.0             # 最小推力 (N) - 防止电机停转
-T_HOVER = MASS * G_VAL  # 悬停推力 ≈ 14.715 N
+# 推力限制 (比力, m/s²)
+# 悬停时 T = g ≈ 9.81 m/s²
+T_MAX = 20.0            # 最大推力比力 ≈ 2g (m/s²)
+T_MIN = 2.0             # 最小推力比力 ≈ 0.2g (m/s²)
+T_HOVER = G_VAL         # 悬停推力比力 = g ≈ 9.81 m/s²
 
 # 角速度限制
 RATE_MAX_XY = 3.0       # 最大Roll/Pitch角速度 (rad/s)
@@ -53,18 +56,19 @@ T_HORIZON = 1.0         # 预测时域 (秒)
 # 位置权重 [x, y, z] - z权重更高保持高度
 Q_POS = [100.0, 100.0, 200.0]
 
-# 四元数权重 [qw, qx, qy, qz] - 关键！控制Yaw跟踪
-# 设置较高以确保机头死死咬住法向量
-Q_QUAT = [50.0, 50.0, 50.0, 50.0]
+# 四元数权重 [qw, qx, qy, qz]
+# 重要：设为0或很小，让MPC自由决定roll/pitch来追踪位置
+# 不追踪四元数，因为参考四元数只有yaw，没有正确的roll/pitch倾斜
+# yaw追踪通过单独的机制实现（后续改进）
+Q_QUAT = [0.0, 0.0, 0.0, 0.0]
 
 # 速度权重 [vx, vy, vz]
 Q_VEL = [10.0, 10.0, 10.0]
 
 # 输入权重 [Thrust, wx, wy, wz]
-# 角速度惩罚设小，允许MPC更积极地调整姿态
-R_INPUT = [0.1, 0.5, 0.5, 0.5]
+# 增加角速度惩罚，防止疯狂旋转
+R_INPUT = [0.1, 1.0, 1.0, 0.5]
 
-# ===============================================================
 
 
 def export_drone_model():
@@ -73,7 +77,7 @@ def export_drone_model():
 
     状态向量 x (10维):
         [px, py, pz, qw, qx, qy, qz, vx, vy, vz]
-        - p: 位置 (NED坐标系)
+        - p: 位置 (ENU坐标系)
         - q: 四元数 (w, x, y, z顺序)
         - v: 速度
 
@@ -83,14 +87,14 @@ def export_drone_model():
         - w: 机体角速度 (rad/s)
 
     坐标系约定:
-        - 使用NED (North-East-Down)
-        - Z轴向下为正
-        - 推力沿机体-Z方向（向上）
+        - 使用ENU (East-North-Up) - 与ROS/MAVROS一致
+        - Z轴向上为正
+        - 推力沿机体+Z方向（向上）
     """
     model_name = 'ship_painter_mpc'
 
-    # ===== 状态变量定义 =====
-    # 位置 (NED)
+    # 状态变量定义
+    # 位置 (ENU)
     px = SX.sym('px')
     py = SX.sym('py')
     pz = SX.sym('pz')
@@ -101,7 +105,7 @@ def export_drone_model():
     qy = SX.sym('qy')
     qz = SX.sym('qz')
 
-    # 速度 (NED)
+    # 速度 (ENU)
     vx = SX.sym('vx')
     vy = SX.sym('vy')
     vz = SX.sym('vz')
@@ -109,7 +113,7 @@ def export_drone_model():
     # 组合状态向量 [10x1]
     x = vertcat(px, py, pz, qw, qx, qy, qz, vx, vy, vz)
 
-    # ===== 控制变量定义 =====
+    # 控制变量定义
     T = SX.sym('T')      # 推力 (N)
     wx = SX.sym('wx')    # Roll角速度 (rad/s)
     wy = SX.sym('wy')    # Pitch角速度 (rad/s)
@@ -117,7 +121,7 @@ def export_drone_model():
 
     u = vertcat(T, wx, wy, wz)
 
-    # ===== 动力学方程 =====
+    # 动力学方程
 
     # 1. 位置导数 = 速度
     p_dot = vertcat(vx, vy, vz)
@@ -131,14 +135,15 @@ def export_drone_model():
     ).reshape((3, 3))
 
     # 3. 速度导数 (牛顿第二定律)
-    # 在NED坐标系中:
-    # - 推力在机体坐标系沿-Z方向（向上）
-    # - 重力沿世界坐标系+Z方向（向下）
-    thrust_body = vertcat(0, 0, -T)  # 机体坐标系中推力向-Z（向上）
-    gravity_world = vertcat(0, 0, G_VAL)  # 重力向+Z（向下）
-
-    # a = R * F_body / m + g
-    v_dot = mtimes(R_WB, thrust_body) / MASS + gravity_world
+    # 使用rpg_mpc相同的动力学模型
+    # T是比力(specific thrust = 加速度), 不是力!
+    # a = R * [0,0,T] - [0,0,g]
+    # 直接展开旋转矩阵第三列 (body Z轴在世界坐标系中的方向)
+    v_dot = vertcat(
+        2 * (qw * qy + qx * qz) * T,           # a_x
+        2 * (qy * qz - qw * qx) * T,           # a_y
+        (1 - 2*qx*qx - 2*qy*qy) * T - G_VAL    # a_z (减去重力)
+    )
 
     # 4. 四元数导数 (四元数运动学)
     # q_dot = 0.5 * q ⊗ [0, omega]
@@ -153,7 +158,7 @@ def export_drone_model():
     # 组合状态导数
     x_dot = vertcat(p_dot, q_dot, v_dot)
 
-    # ===== 创建Acados模型 =====
+    # 创建Acados模型 
     model = AcadosModel()
     model.f_expl_expr = x_dot       # 显式ODE: dx/dt = f(x, u)
     model.x = x                     # 状态
@@ -188,11 +193,11 @@ def setup_ocp():
     ny = nx + nu            # 14
     ny_e = nx               # 10 (终端)
 
-    # ===== 时域配置 =====
+    # 时域配置
     ocp.dims.N = N_HORIZON
     ocp.solver_options.tf = T_HORIZON
 
-    # ===== 代价函数配置 =====
+    # 代价函数配置
     # 使用 NONLINEAR_LS - 适合四元数非线性
     ocp.cost.cost_type = 'NONLINEAR_LS'
     ocp.cost.cost_type_e = 'NONLINEAR_LS'  # 终端代价
@@ -220,18 +225,18 @@ def setup_ocp():
     ocp.cost.yref = y_ref
     ocp.cost.yref_e = y_ref[:nx]
 
-    # ===== 输入约束 =====
+    # 输入约束
     ocp.constraints.lbu = np.array([T_MIN, -RATE_MAX_XY, -RATE_MAX_XY, -RATE_MAX_Z])
     ocp.constraints.ubu = np.array([T_MAX, RATE_MAX_XY, RATE_MAX_XY, RATE_MAX_Z])
     ocp.constraints.idxbu = np.array([0, 1, 2, 3])
 
-    # ===== 初始状态约束 =====
+    # 初始状态约束
     # x_0 = x_current (会在运行时设置)
     x0 = np.zeros(nx)
     x0[3] = 1.0  # qw = 1
     ocp.constraints.x0 = x0
 
-    # ===== 求解器选项 =====
+    # 求解器选项
     # QP求解器: HPIPM (高性能内点法)
     ocp.solver_options.qp_solver = 'PARTIAL_CONDENSING_HPIPM'
 
@@ -263,9 +268,9 @@ def main():
 
     # 打印配置信息
     print(f"\n[配置参数]")
-    print(f"  质量: {MASS} kg")
-    print(f"  推力范围: [{T_MIN}, {T_MAX}] N")
-    print(f"  悬停推力: {T_HOVER:.2f} N")
+    print(f"  重力加速度: {G_VAL} m/s²")
+    print(f"  比力范围: [{T_MIN}, {T_MAX}] m/s² (specific thrust)")
+    print(f"  悬停比力: {T_HOVER:.2f} m/s² (= g)")
     print(f"  角速度限制: XY={RATE_MAX_XY} rad/s, Z={RATE_MAX_Z} rad/s")
     print(f"  预测时域: {T_HORIZON} s, {N_HORIZON}步")
     print(f"  每步时长: {T_HORIZON/N_HORIZON:.3f} s")
