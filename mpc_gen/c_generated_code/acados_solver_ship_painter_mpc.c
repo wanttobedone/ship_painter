@@ -488,20 +488,20 @@ void ship_painter_mpc_acados_setup_nlp_in(ship_painter_mpc_solver_capsule* capsu
 
    double* W_0 = calloc(NY0*NY0, sizeof(double));
     // change only the non-zero elements:
-    W_0[0+(NY0) * 0] = 20;
-    W_0[1+(NY0) * 1] = 20;
-    W_0[2+(NY0) * 2] = 50;
+    W_0[0+(NY0) * 0] = 150;
+    W_0[1+(NY0) * 1] = 150;
+    W_0[2+(NY0) * 2] = 150;
     W_0[3+(NY0) * 3] = 50;
-    W_0[4+(NY0) * 4] = 50;
-    W_0[5+(NY0) * 5] = 50;
+    W_0[4+(NY0) * 4] = 1;
+    W_0[5+(NY0) * 5] = 1;
     W_0[6+(NY0) * 6] = 50;
     W_0[7+(NY0) * 7] = 10;
     W_0[8+(NY0) * 8] = 10;
     W_0[9+(NY0) * 9] = 10;
-    W_0[10+(NY0) * 10] = 0.5;
-    W_0[11+(NY0) * 11] = 10;
-    W_0[12+(NY0) * 12] = 10;
-    W_0[13+(NY0) * 13] = 5;
+    W_0[10+(NY0) * 10] = 1;
+    W_0[11+(NY0) * 11] = 5;
+    W_0[12+(NY0) * 12] = 5;
+    W_0[13+(NY0) * 13] = 2.5;
     ocp_nlp_cost_model_set(nlp_config, nlp_dims, nlp_in, 0, "W", W_0);
     free(W_0);
     double* yref = calloc(NY, sizeof(double));
@@ -516,20 +516,20 @@ void ship_painter_mpc_acados_setup_nlp_in(ship_painter_mpc_solver_capsule* capsu
     free(yref);
     double* W = calloc(NY*NY, sizeof(double));
     // change only the non-zero elements:
-    W[0+(NY) * 0] = 20;
-    W[1+(NY) * 1] = 20;
-    W[2+(NY) * 2] = 50;
+    W[0+(NY) * 0] = 150;
+    W[1+(NY) * 1] = 150;
+    W[2+(NY) * 2] = 150;
     W[3+(NY) * 3] = 50;
-    W[4+(NY) * 4] = 50;
-    W[5+(NY) * 5] = 50;
+    W[4+(NY) * 4] = 1;
+    W[5+(NY) * 5] = 1;
     W[6+(NY) * 6] = 50;
     W[7+(NY) * 7] = 10;
     W[8+(NY) * 8] = 10;
     W[9+(NY) * 9] = 10;
-    W[10+(NY) * 10] = 0.5;
-    W[11+(NY) * 11] = 10;
-    W[12+(NY) * 12] = 10;
-    W[13+(NY) * 13] = 5;
+    W[10+(NY) * 10] = 1;
+    W[11+(NY) * 11] = 5;
+    W[12+(NY) * 12] = 5;
+    W[13+(NY) * 13] = 2.5;
 
     for (int i = 1; i < N; i++)
     {
@@ -544,12 +544,12 @@ void ship_painter_mpc_acados_setup_nlp_in(ship_painter_mpc_solver_capsule* capsu
 
     double* W_e = calloc(NYN*NYN, sizeof(double));
     // change only the non-zero elements:
-    W_e[0+(NYN) * 0] = 20;
-    W_e[1+(NYN) * 1] = 20;
-    W_e[2+(NYN) * 2] = 50;
+    W_e[0+(NYN) * 0] = 150;
+    W_e[1+(NYN) * 1] = 150;
+    W_e[2+(NYN) * 2] = 150;
     W_e[3+(NYN) * 3] = 50;
-    W_e[4+(NYN) * 4] = 50;
-    W_e[5+(NYN) * 5] = 50;
+    W_e[4+(NYN) * 4] = 1;
+    W_e[5+(NYN) * 5] = 1;
     W_e[6+(NYN) * 6] = 50;
     W_e[7+(NYN) * 7] = 10;
     W_e[8+(NYN) * 8] = 10;

@@ -312,6 +312,25 @@ if(EXISTS ${ACADOS_INCLUDE_DIR}/acados AND EXISTS ${MPC_GEN_DIR})
         )
 
         message(STATUS "  MPC Runner node configured successfully!")
+
+        # === Thrust Mapper Node ===
+        # 推力映射节点：将 MPC 输出的加速度转换为飞控油门
+        add_executable(thrust_mapper_node
+            src/thrust_mapper_node.cpp
+        )
+
+        target_link_libraries(thrust_mapper_node
+            ${catkin_LIBRARIES}
+        )
+
+        add_dependencies(thrust_mapper_node ${PROJECT_NAME}_generate_messages_cpp)
+
+        set_target_properties(thrust_mapper_node PROPERTIES
+            CXX_STANDARD 17
+            CXX_STANDARD_REQUIRED ON
+        )
+
+        message(STATUS "  Thrust Mapper node configured successfully!")
     else()
         message(WARNING "MPC generated sources not found in ${MPC_GEN_DIR}")
         message(WARNING "Please run: cd mpc_gen && python3 generate_mpc.py")

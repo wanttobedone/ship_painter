@@ -260,9 +260,10 @@ MPCRunner::MPCRunner()
         &MPCRunner::bsplineCallback, this);
 
     // ===== 发布者 =====
-    // AttitudeTarget: 发送推力+角速度
+    // AttitudeTarget: 发送比力（加速度）+角速度 到推力映射节点
+    // 注意：thrust 字段是加速度 (m/s²)，由 thrust_mapper_node 转换为油门
     ctrl_pub_ = nh_.advertise<mavros_msgs::AttitudeTarget>(
-        mavros_ns + "/setpoint_raw/attitude", 1);
+        "/ship_painter/mpc_raw_command", 1);
 
     // 预测轨迹可视化（参考轨迹，蓝色线）
     pred_traj_pub_ = nh_.advertise<visualization_msgs::Marker>(
@@ -633,6 +634,8 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
 
     // ===== 设置MPC参考轨迹 =====
     std::vector<Eigen::Vector3d> pred_positions;  // 用于可视化
+    // 在循环外定义并初始化 q_ref_last
+    Eigen::Quaterniond q_ref_last = q_current;
 
     for (int i = 0; i <= N_HORIZON_; i++) {
         double t_pred = t + i * DT_;
@@ -662,14 +665,16 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
         // 四元数半球一致性检查（防止 q 和 -q 跳变）
         // 第一步与当前状态比较，后续步与前一步比较
         Eigen::Quaterniond q_ref;
-        if (i == 0) {
+       if (i == 0) {
+            // 第0步：跟当前真实姿态比
             q_ref = ensureQuaternionHemisphere(q_ref_dyn, q_current);
         } else {
-            // 使用静态变量记录上一步的参考四元数
-            static Eigen::Quaterniond q_ref_last = q_current;
+            // 后续步：跟上一步的参考姿态比（确保预测序列内部连续）
             q_ref = ensureQuaternionHemisphere(q_ref_dyn, q_ref_last);
-            q_ref_last = q_ref;
         }
+        
+        //  新 last 值给下一次循环用
+        q_ref_last = q_ref;
 
         // 构建参考向量 y_ref = [p, q, v, u]
         double y_ref[NX_ + NU_];
@@ -817,7 +822,7 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
     last_wy_ = wy_filtered;
     last_wz_ = wz_filtered;
 
-    // ===== 发布控制指令 =====
+    // ===== 发布控制指令（原始加速度，由 thrust_mapper 转换）=====
     mavros_msgs::AttitudeTarget cmd;
     cmd.header.stamp = ros::Time::now();
     cmd.header.frame_id = "base_link";
@@ -827,13 +832,9 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
     // IGNORE_THRUST = 64, IGNORE_ATTITUDE = 128
     cmd.type_mask = mavros_msgs::AttitudeTarget::IGNORE_ATTITUDE;  // = 128
 
-    // 推力归一化: throttle = T / T_max
-    double thrust_ratio = thrust_filtered / T_MAX_;
-    double thrust_normalized = std::sqrt(std::max(0.0, thrust_ratio));
-
-    // 安全限幅
-    thrust_normalized = std::clamp(thrust_normalized, 0.0, 1.0);
-    cmd.thrust = static_cast<float>(thrust_normalized);
+    // 直接输出比力（加速度 m/s²），由 thrust_mapper_node 转换为油门
+    // 不再在此处做 sqrt 映射
+    cmd.thrust = static_cast<float>(thrust_filtered);
 
     // 角速度（使用滤波后的值）
     cmd.body_rate.x = wx_filtered;
@@ -911,8 +912,8 @@ void MPCRunner::publishHoverCommand() {
     cmd.header.stamp = ros::Time::now();
     cmd.type_mask = mavros_msgs::AttitudeTarget::IGNORE_ATTITUDE;
 
-    // 悬停推力
-    cmd.thrust = static_cast<float>(T_HOVER_ / T_MAX_);
+    // 悬停比力（加速度 = g），由 thrust_mapper 转换为油门
+    cmd.thrust = static_cast<float>(T_HOVER_);
 
     // 零角速度
     cmd.body_rate.x = 0.0;
@@ -951,7 +952,6 @@ void MPCRunner::publishPredictedTrajectory(const std::vector<Eigen::Vector3d>& p
     pred_traj_pub_.publish(marker);
 }
 
-// ===== Main =====
 int main(int argc, char** argv) {
     ros::init(argc, argv, "mpc_runner");
 
