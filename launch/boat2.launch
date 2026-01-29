@@ -1,3 +1,5 @@
+<!-- 路径规划与轨迹跟踪节点，发布给底层飞控数据是期望位置/速度/加速度/姿态 -->
+
 <launch>
     
     <arg name="traverse_clockwise" default="true"/><!--true顺时针，false逆时针-->

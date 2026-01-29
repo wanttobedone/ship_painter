@@ -78,84 +78,85 @@ void BSpline::generateChordLengthKnots(
 
     // 辅助函数：计算 t 时刻所有非零基函数的值及其一阶、二阶导数
     // 返回值: bases[k][j] 表示第 j 个基函数的 k 阶导数 (k=0,1,2)
-void BSpline::evaluateBasisDerivatives(double t, int span, 
+void BSpline::evaluateBasisDerivatives(double t, int span,
                                      std::vector<std::vector<double>>& bases) const {
-    // 初始化
-    bases.assign(3, std::vector<double>(degree_ + 1, 0.0));
-    
+    // 初始化：支持到3阶导数 (0,1,2,3)
+    int max_deriv = std::min(3, degree_);  // 最多3阶，但不能超过B样条阶数
+    bases.assign(max_deriv + 1, std::vector<double>(degree_ + 1, 0.0));
+
     std::vector<double> left(degree_ + 1, 0.0);
     std::vector<double> right(degree_ + 1, 0.0);
     std::vector<std::vector<double>> ndu(degree_ + 1, std::vector<double>(degree_ + 1));
-    
+
     ndu[0][0] = 1.0;
-    
+
     // 1. 计算所有基函数值 (N_i,p) - 三角形迭代
     for (int j = 1; j <= degree_; j++) {
         left[j] = t - knots_[span + 1 - j];
         right[j] = knots_[span + j] - t;
         double saved = 0.0;
-        
+
         for (int r = 0; r < j; r++) {
             // 下三角部分
             ndu[j][r] = right[r + 1] + left[j - r];
             double temp = ndu[r][j - 1] / ndu[j][r];
-            
+
             ndu[r][j] = saved + right[r + 1] * temp;
             saved = left[j - r] * temp;
         }
         ndu[j][j] = saved;
     }
-    
+
     // 存入0阶导数 (原值)
     for (int j = 0; j <= degree_; j++) {
         bases[0][j] = ndu[j][degree_];
     }
-    
+
     // 2. 计算导数
     // a[k][j] 存储中间变量
     std::vector<std::vector<double>> a(2, std::vector<double>(degree_ + 1));
-    
+
     for (int r = 0; r <= degree_; r++) {
-        int s1 = 0; 
-        int s2 = 1; 
+        int s1 = 0;
+        int s2 = 1;
         a[0][0] = 1.0;
-        
-        // 计算 k 阶导数
-        for (int k = 1; k <= 2; k++) { // 我们只需要到2阶
+
+        // 计算 k 阶导数（扩展到3阶）
+        for (int k = 1; k <= max_deriv; k++) {
             double d = 0.0;
-            int rk = r - k; 
+            int rk = r - k;
             int pk = degree_ - k;
-            
+
             if (r >= k) {
                 a[s2][0] = a[s1][0] / ndu[pk + 1][rk];
                 d = a[s2][0] * ndu[rk][pk];
             }
-            
+
             int j1 = (rk >= -1) ? 1 : -rk;
             int j2 = (r - 1 <= pk) ? k - 1 : degree_ - r;
-            
+
             for (int j = j1; j <= j2; j++) {
                 a[s2][j] = (a[s1][j] - a[s1][j - 1]) / ndu[pk + 1][rk + j];
                 d += a[s2][j] * ndu[rk + j][pk];
             }
-            
+
             if (r <= pk) {
                 a[s2][k] = -a[s1][k - 1] / ndu[pk + 1][r];
                 d += a[s2][k] * ndu[r][pk];
             }
-            
+
             bases[k][r] = d;
             std::swap(s1, s2);
         }
     }
-    
+
     // 3. 修正导数系数 (乘以阶数因子)
-    double r = degree_;
-    for (int k = 1; k <= 2; k++) {
+    double coef = degree_;
+    for (int k = 1; k <= max_deriv; k++) {
         for (int j = 0; j <= degree_; j++) {
-            bases[k][j] *= r;
+            bases[k][j] *= coef;
         }
-        r *= (degree_ - k);
+        coef *= (degree_ - k);
     }
 }
 
@@ -196,19 +197,37 @@ Eigen::Vector3d BSpline::getVelocity(double t) const {
 Eigen::Vector3d BSpline::getAcceleration(double t) const {
     // 必须有足够的点和阶数
     if (control_points_.size() < 3 || degree_ < 2) return Eigen::Vector3d::Zero();
-    
+
     t = std::max(0.0, std::min(t, total_time_));
-    
+
     int span = findSpan(t);
     std::vector<std::vector<double>> bases;
     evaluateBasisDerivatives(t, span, bases);
-    
+
     Eigen::Vector3d a(0, 0, 0);
     for (int i = 0; i <= degree_; i++) {
         // 使用2阶导数基函数直接对原控制点加权
         a += control_points_[span - degree_ + i] * bases[2][i];
     }
     return a;
+}
+
+Eigen::Vector3d BSpline::getJerk(double t) const {
+    // 必须有足够的点和阶数（3阶导数需要阶数≥3）
+    if (control_points_.size() < 4 || degree_ < 3) return Eigen::Vector3d::Zero();
+
+    t = std::max(0.0, std::min(t, total_time_));
+
+    int span = findSpan(t);
+    std::vector<std::vector<double>> bases;
+    evaluateBasisDerivatives(t, span, bases);
+
+    Eigen::Vector3d j(0, 0, 0);
+    for (int i = 0; i <= degree_; i++) {
+        // 使用3阶导数基函数直接对原控制点加权
+        j += control_points_[span - degree_ + i] * bases[3][i];
+    }
+    return j;
 }
 
 // 法向量插值保持不变，但使用高效算法

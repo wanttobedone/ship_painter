@@ -8,10 +8,19 @@
  * - 输出: 推力+角速度指令 (AttitudeTarget)
  *
  * 关键特性:
- * - 完整的Yaw控制（从法向量计算）
- * - 四元数半球一致性检查
- * - atan2奇异点保护
+ * - 全姿态解算（Geometric Construction）：
+ *   - 机体Z轴由物理决定（推力方向 = acc - g）
+ *   - 机体X轴由任务决定（机头正对墙面法向量）
+ *   - 通过叉乘构建正交坐标系，自然解决 Yaw 与 Roll/Pitch 的耦合
+ * - MPC姿态闭环：Q_QUAT激活，统一优化位置和姿态
+ * - 四元数半球一致性检查（防止 q/-q 跳变）
+ * - 奇异点保护（自由落体、z_b平行x_des等情况）
  * - 求解失败时的安全悬停
+ *
+ * 升级说明 (2024):
+ * - 引入几何构建法计算全姿态（从加速度+法向量）
+ * - 移除外部Yaw PD控制器，由MPC统一优化
+ * - 保持质量解耦设计（比力接口）
  *
  * @author Claude Code Assistant
  * @date 2024
@@ -178,6 +187,29 @@ private:
      * @return 滤波后的值
      */
     double lowPassFilter(double new_val, double old_val, double alpha);
+
+    /**
+     * @brief 全姿态解算器 (Differential Flatness + Geometric Construction)
+     *
+     * 核心思想：
+     * 1. 机体Z轴由物理决定：必须指向合加速度方向（推力方向）
+     * 2. 机体X轴由任务决定：机头正对墙面（法向量取反）
+     * 3. 通过叉乘构建正交坐标系，自然解决 Yaw 与 Roll/Pitch 的耦合
+     *
+     * @param acc 轨迹加速度 (m/s²)
+     * @param jerk 轨迹加加速度 (m/s³)
+     * @param normal_vec 墙面法向量（指向墙外）
+     * @param T_ref [out] 参考推力比力 (m/s²)
+     * @param q_ref [out] 参考姿态四元数
+     * @param omega_ref [out] 参考角速度 (rad/s)
+     */
+    void calculateDynamicReference(
+        const Eigen::Vector3d& acc,
+        const Eigen::Vector3d& jerk,
+        const Eigen::Vector3d& normal_vec,
+        double& T_ref,
+        Eigen::Quaterniond& q_ref,
+        Eigen::Vector3d& omega_ref);
 };
 
 // 构造函数
@@ -259,13 +291,14 @@ MPCRunner::MPCRunner()
 
     last_status_print_ = ros::Time::now();
 
-    ROS_INFO("MPC Runner Node Initialized");
+    ROS_INFO("MPC Runner Node Initialized (Full-State Feedforward Mode)");
     ROS_INFO("  MAVROS namespace: %s", mavros_ns.c_str());
     ROS_INFO("  Control rate: %.1f Hz", control_rate);
     ROS_INFO("  T_hover: %.2f m/s^2 (specific thrust)", T_HOVER_);
     ROS_INFO("  Thrust range: [%.1f, %.1f] m/s^2", T_MIN_, T_MAX_);
     ROS_INFO("  MPC horizon: %.2f s, %d steps", T_HORIZON_, N_HORIZON_);
-    ROS_INFO("  Yaw control: Kp=%.2f, Kd=%.2f, max_rate=%.2f rad/s", yaw_kp_, yaw_kd_, max_yaw_rate_);
+    ROS_INFO("  Attitude control: MPC unified (Q_QUAT enabled)");
+    ROS_INFO("  Feedforward: Dynamic thrust + attitude from differential flatness");
     ROS_INFO("  Output filter alpha: %.2f", filter_alpha_);
 }
 
@@ -466,6 +499,86 @@ double MPCRunner::lowPassFilter(double new_val, double old_val, double alpha) {
     return alpha * new_val + (1.0 - alpha) * old_val;
 }
 
+// ===== 全姿态解算器 (Geometric Construction) =====
+void MPCRunner::calculateDynamicReference(
+    const Eigen::Vector3d& acc,
+    const Eigen::Vector3d& jerk,
+    const Eigen::Vector3d& normal_vec,
+    double& T_ref,
+    Eigen::Quaterniond& q_ref,
+    Eigen::Vector3d& omega_ref)
+{
+    // ===== 1. 计算合力向量（推力方向）=====
+    // ENU坐标系：重力是 (0, 0, -9.8066)
+    // 为了抵消重力并产生轨迹加速度：F_thrust = m * (a_traj - g)
+    // 比力形式：a_thrust = a_traj - g = a_traj - (0, 0, -9.8066) = a_traj + (0, 0, 9.8066)
+    const Eigen::Vector3d g(0.0, 0.0, -9.8066);
+    Eigen::Vector3d t_vec = acc - g;  // 推力方向向量
+
+    // 计算推力大小（比力）
+    T_ref = t_vec.norm();
+
+    // ===== 2. 构建机体 Z 轴 (z_b) =====
+    // 安全检查：如果自由落体 (t_vec 接近 0)，保持 Z 轴向上
+    if (T_ref < 1e-3) {
+        T_ref = T_HOVER_;
+        q_ref = Eigen::Quaterniond::Identity();
+        omega_ref.setZero();
+        return;
+    }
+    Eigen::Vector3d z_b = t_vec.normalized();
+
+    // ===== 3. 确定期望的机头朝向 (x_des) =====
+    // 喷涂任务：机头 (X轴) 指向墙面 => 法向量的反方向
+    Eigen::Vector3d x_des = -normal_vec.normalized();
+
+    // ===== 4. 构建机体 Y 轴 (y_b) =====
+    // y_b = z_b × x_des（确保 Y 轴同时垂直于推力方向和期望朝向）
+    Eigen::Vector3d y_b_temp = z_b.cross(x_des);
+
+    // --- 奇异点保护 ---
+    // 情况 A: z_b 和 x_des 平行（比如飞机垂直对着墙俯冲）
+    if (y_b_temp.norm() < 1e-2) {
+        // 备选方案：借用世界 Y 轴来生成
+        y_b_temp = z_b.cross(Eigen::Vector3d::UnitY());
+        if (y_b_temp.norm() < 1e-2) {
+            // 极端情况：z_b 也和世界Y轴平行，用世界X轴
+            y_b_temp = z_b.cross(Eigen::Vector3d::UnitX());
+        }
+    }
+    Eigen::Vector3d y_b = y_b_temp.normalized();
+
+    // ===== 5. 修正机体 X 轴 (x_b) =====
+    // 确保 X, Y, Z 正交
+    Eigen::Vector3d x_b = y_b.cross(z_b).normalized();
+
+    // ===== 6. 构建旋转矩阵并转为四元数 =====
+    Eigen::Matrix3d R_WB;
+    R_WB.col(0) = x_b;
+    R_WB.col(1) = y_b;
+    R_WB.col(2) = z_b;
+
+    q_ref = Eigen::Quaterniond(R_WB);
+    q_ref.normalize();
+
+    // ===== 7. 计算参考角速度（简化版本）=====
+    // 从 jerk 近似计算 roll/pitch rate
+    // 完整公式复杂，这里用简化方案
+    if (T_ref > 0.1) {
+        Eigen::Vector3d h_omega = jerk / T_ref;
+        omega_ref.x() = -h_omega.dot(y_b);  // Roll rate
+        omega_ref.y() = h_omega.dot(x_b);   // Pitch rate
+        omega_ref.z() = 0.0;                // Yaw rate（由MPC优化）
+
+        // 角速度限幅
+        const double max_omega_xy = 2.0;  // rad/s
+        omega_ref.x() = std::clamp(omega_ref.x(), -max_omega_xy, max_omega_xy);
+        omega_ref.y() = std::clamp(omega_ref.y(), -max_omega_xy, max_omega_xy);
+    } else {
+        omega_ref.setZero();
+    }
+}
+
 // ===== 主控制循环 =====
 void MPCRunner::controlLoop(const ros::TimerEvent& event) {
     // 检查前置条件
@@ -533,17 +646,30 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
         Eigen::Vector3d p_ref = traj.getPosition(t_pred);
         Eigen::Vector3d v_ref = traj.getVelocity(t_pred);
         Eigen::Vector3d n_ref = traj.getNormal(t_pred);
+        Eigen::Vector3d a_ref = traj.getAcceleration(t_pred);  // 轨迹加速度
+        Eigen::Vector3d j_ref = traj.getJerk(t_pred);          // 轨迹加加速度
 
         pred_positions.push_back(p_ref);
 
-        // 计算Yaw角（带奇异点保护）
-        double yaw = computeYawFromNormal(n_ref);
+        // ===== 几何构建法计算全姿态 =====
+        // 输入：轨迹加速度 + 墙面法向量
+        // 输出：动态推力、完整姿态四元数（含Roll/Pitch/Yaw）、角速度前馈
+        double T_ref_dyn;
+        Eigen::Quaterniond q_ref_dyn;
+        Eigen::Vector3d omega_ref_dyn;
+        calculateDynamicReference(a_ref, j_ref, n_ref, T_ref_dyn, q_ref_dyn, omega_ref_dyn);
 
-        // Yaw角转四元数（仅绕Z轴旋转）
-        Eigen::Quaterniond q_ref(Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()));
-
-        // 四元数半球一致性检查
-        q_ref = ensureQuaternionHemisphere(q_ref, q_current);
+        // 四元数半球一致性检查（防止 q 和 -q 跳变）
+        // 第一步与当前状态比较，后续步与前一步比较
+        Eigen::Quaterniond q_ref;
+        if (i == 0) {
+            q_ref = ensureQuaternionHemisphere(q_ref_dyn, q_current);
+        } else {
+            // 使用静态变量记录上一步的参考四元数
+            static Eigen::Quaterniond q_ref_last = q_current;
+            q_ref = ensureQuaternionHemisphere(q_ref_dyn, q_ref_last);
+            q_ref_last = q_ref;
+        }
 
         // 构建参考向量 y_ref = [p, q, v, u]
         double y_ref[NX_ + NU_];
@@ -553,7 +679,7 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
         y_ref[1] = p_ref.y();
         y_ref[2] = p_ref.z();
 
-        // 四元数
+        // 四元数（含 Roll/Pitch 前馈倾角）
         y_ref[3] = q_ref.w();
         y_ref[4] = q_ref.x();
         y_ref[5] = q_ref.y();
@@ -564,11 +690,11 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
         y_ref[8] = v_ref.y();
         y_ref[9] = v_ref.z();
 
-        // 参考输入
-        y_ref[10] = T_HOVER_;  // 参考推力
-        y_ref[11] = 0.0;       // 参考角速度 (后续可添加前馈)
-        y_ref[12] = 0.0;
-        y_ref[13] = 0.0;
+        // 参考输入（动态前馈）
+        y_ref[10] = T_ref_dyn;         // 动态推力（替换原来的 T_HOVER）
+        y_ref[11] = omega_ref_dyn.x(); // 前馈 Roll rate
+        y_ref[12] = omega_ref_dyn.y(); // 前馈 Pitch rate
+        y_ref[13] = omega_ref_dyn.z(); // 前馈 Yaw rate
 
         // 设置到求解器
         if (i < N_HORIZON_) {
@@ -660,19 +786,24 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
         acados_capsule_->nlp_out,
         0, "u", u0);
 
-    // ===== Yaw闭环控制 =====
-    // 由于Q_QUAT=0，MPC不直接控制yaw，需要单独的yaw控制器
-    // 获取当前yaw和参考yaw
-    double current_yaw = quaternionToYaw(q_current);
+    // ===== Yaw控制（已由MPC统一优化）=====
+    // Q_QUAT已激活，MPC直接控制全姿态（含Roll/Pitch/Yaw），无需外挂PD控制器
+
+    // 计算当前时刻的参考姿态（用于可视化和日志）
+    Eigen::Vector3d a_now = traj.getAcceleration(t);
+    Eigen::Vector3d j_now = traj.getJerk(t);
     Eigen::Vector3d n_now = traj.getNormal(t);
-    double target_yaw = computeYawFromNormal(n_now);
+    double T_ref_now;
+    Eigen::Quaterniond q_ref_now;
+    Eigen::Vector3d omega_ref_now;
+    calculateDynamicReference(a_now, j_now, n_now, T_ref_now, q_ref_now, omega_ref_now);
 
-    // PD控制计算yaw_rate
-    double control_dt = 1.0 / 50.0;  // 假设50Hz控制频率
-    double yaw_rate_cmd = yawPDController(target_yaw, current_yaw, control_dt);
+    // 提取当前 yaw 和目标 yaw 用于日志显示
+    double current_yaw = quaternionToYaw(q_current);
+    double target_yaw = quaternionToYaw(q_ref_now);
 
-    // 将yaw_rate叠加到MPC输出上（MPC的wz输出通常接近0）
-    double wz_total = u0[3] + yaw_rate_cmd;
+    // 直接使用MPC输出的yaw_rate（不再叠加PD控制）
+    double wz_total = u0[3];
 
     // ===== 控制输出滤波（减少抖动）=====
     double thrust_filtered = lowPassFilter(u0[0], last_thrust_, filter_alpha_);
@@ -715,6 +846,7 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
     publishPredictedTrajectory(pred_positions);
 
     // 发布当前参考位姿（用于RViz可视化）
+    // 使用几何构建法计算的全姿态（含Roll/Pitch/Yaw）
     {
         geometry_msgs::PoseStamped ref_pose_msg;
         ref_pose_msg.header.stamp = ros::Time::now();
@@ -725,7 +857,7 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
         ref_pose_msg.pose.position.y = p_ref_now.y();
         ref_pose_msg.pose.position.z = p_ref_now.z();
 
-        Eigen::Quaterniond q_ref_now(Eigen::AngleAxisd(target_yaw, Eigen::Vector3d::UnitZ()));
+        // 使用几何构建法计算的全姿态四元数
         ref_pose_msg.pose.orientation.w = q_ref_now.w();
         ref_pose_msg.pose.orientation.x = q_ref_now.x();
         ref_pose_msg.pose.orientation.y = q_ref_now.y();

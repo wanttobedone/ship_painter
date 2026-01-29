@@ -43,6 +43,7 @@ public:
     Eigen::Vector3d getPosition(double t) const;
     Eigen::Vector3d getVelocity(double t) const;
     Eigen::Vector3d getAcceleration(double t) const;
+    Eigen::Vector3d getJerk(double t) const;    // 三阶导数（加加速度）
     Eigen::Vector3d getNormal(double t) const;  // 插值法向量
     
     // 获取轨迹参数
