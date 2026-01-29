@@ -94,7 +94,7 @@
         <!-- 注意: 使用比力(specific thrust = 加速度 m/s²), 不是力(N)! -->
         <!-- 悬停时 T = g ≈ 9.8 m/s² -->
         <param name="mass" value="1.5" type="double"/>  <!-- 仅用于日志显示 -->
-        <param name="thrust_max" value="20.0" type="double"/>  <!-- 最大比力 ≈ 2g m/s² -->
+        <param name="thrust_max" value="19.0" type="double"/>
         <param name="thrust_min" value="2.0" type="double"/>   <!-- 最小比力 ≈ 0.2g m/s² -->
 
         <!-- 控制频率 (Hz) -->

@@ -57,7 +57,8 @@ private:
     ros::Subscriber velocity_sub_;       // 速度 (ENU世界坐标系)
     ros::Subscriber bspline_sub_;
     ros::Publisher ctrl_pub_;
-    ros::Publisher pred_traj_pub_;      // 预测轨迹可视化
+    ros::Publisher pred_traj_pub_;      // 预测轨迹可视化（参考轨迹，蓝色）
+    ros::Publisher mpc_prediction_pub_; // MPC内部预测轨迹可视化（绿色）
     ros::Publisher ref_pose_pub_;       // 参考位姿可视化
     ros::Publisher actual_path_pub_;    // 实际飞行轨迹
     ros::Timer control_timer_;
@@ -231,9 +232,13 @@ MPCRunner::MPCRunner()
     ctrl_pub_ = nh_.advertise<mavros_msgs::AttitudeTarget>(
         mavros_ns + "/setpoint_raw/attitude", 1);
 
-    // 预测轨迹可视化
+    // 预测轨迹可视化（参考轨迹，蓝色线）
     pred_traj_pub_ = nh_.advertise<visualization_msgs::Marker>(
         "/mpc/predicted_trajectory", 1);
+
+    // MPC内部预测轨迹可视化（MPC求解器输出，绿色线）
+    mpc_prediction_pub_ = nh_.advertise<visualization_msgs::Marker>(
+        "/mpc/mpc_internal_prediction", 10);
 
     // 参考位姿可视化
     ref_pose_pub_ = nh_.advertise<geometry_msgs::PoseStamped>(
@@ -604,6 +609,50 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
 
     solve_success_count_++;
 
+    // ===== 提取并可视化 MPC 内部预测轨迹（绿色线）=====
+    // 这是 MPC 求解器计算出的未来 N 步状态预测
+    // 与参考轨迹（蓝色）对比，可以判断是"规划偏差"还是"动力不足"
+    {
+        visualization_msgs::Marker pred_line;
+        pred_line.header.frame_id = "map";
+        pred_line.header.stamp = ros::Time::now();
+        pred_line.ns = "mpc_internal_prediction";
+        pred_line.id = 0;
+        pred_line.type = visualization_msgs::Marker::LINE_STRIP;
+        pred_line.action = visualization_msgs::Marker::ADD;
+
+        // 设置线宽
+        pred_line.scale.x = 0.05;  // 5cm宽
+
+        // 设置颜色：绿色（代表 MPC 自己的规划）
+        pred_line.color.r = 0.0;
+        pred_line.color.g = 1.0;
+        pred_line.color.b = 0.0;
+        pred_line.color.a = 0.8;
+
+        // 遍历预测时域，提取每一步的状态
+        for (int i = 0; i <= N_HORIZON_; i++) {
+            double x_temp[NX_];  // 临时数组存状态，NX_=10
+
+            // 【核心 API调用】从求解器内存中拿第 i 步的状态 "x"
+            ocp_nlp_out_get(acados_capsule_->nlp_config,
+                            acados_capsule_->nlp_dims,
+                            acados_capsule_->nlp_out,
+                            i, "x", x_temp);
+
+            // 提取位置（前3维: px, py, pz）
+            geometry_msgs::Point p;
+            p.x = x_temp[0];
+            p.y = x_temp[1];
+            p.z = x_temp[2];
+
+            pred_line.points.push_back(p);
+        }
+
+        // 发布出去
+        mpc_prediction_pub_.publish(pred_line);
+    }
+
     // ===== 提取控制量 u0 = [T, wx, wy, wz] =====
     double u0[NU_];
     ocp_nlp_out_get(acados_capsule_->nlp_config,
@@ -648,7 +697,11 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
     cmd.type_mask = mavros_msgs::AttitudeTarget::IGNORE_ATTITUDE;  // = 128
 
     // 推力归一化: throttle = T / T_max
-    double thrust_normalized = std::clamp(thrust_filtered / T_MAX_, 0.0, 1.0);
+    double thrust_ratio = thrust_filtered / T_MAX_;
+    double thrust_normalized = std::sqrt(std::max(0.0, thrust_ratio));
+
+    // 安全限幅
+    thrust_normalized = std::clamp(thrust_normalized, 0.0, 1.0);
     cmd.thrust = static_cast<float>(thrust_normalized);
 
     // 角速度（使用滤波后的值）

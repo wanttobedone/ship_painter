@@ -488,16 +488,16 @@ void ship_painter_mpc_acados_setup_nlp_in(ship_painter_mpc_solver_capsule* capsu
 
    double* W_0 = calloc(NY0*NY0, sizeof(double));
     // change only the non-zero elements:
-    W_0[0+(NY0) * 0] = 100;
-    W_0[1+(NY0) * 1] = 100;
-    W_0[2+(NY0) * 2] = 200;
+    W_0[0+(NY0) * 0] = 20;
+    W_0[1+(NY0) * 1] = 20;
+    W_0[2+(NY0) * 2] = 50;
     W_0[7+(NY0) * 7] = 10;
     W_0[8+(NY0) * 8] = 10;
     W_0[9+(NY0) * 9] = 10;
-    W_0[10+(NY0) * 10] = 0.1;
-    W_0[11+(NY0) * 11] = 1;
-    W_0[12+(NY0) * 12] = 1;
-    W_0[13+(NY0) * 13] = 0.5;
+    W_0[10+(NY0) * 10] = 0.5;
+    W_0[11+(NY0) * 11] = 10;
+    W_0[12+(NY0) * 12] = 10;
+    W_0[13+(NY0) * 13] = 5;
     ocp_nlp_cost_model_set(nlp_config, nlp_dims, nlp_in, 0, "W", W_0);
     free(W_0);
     double* yref = calloc(NY, sizeof(double));
@@ -512,16 +512,16 @@ void ship_painter_mpc_acados_setup_nlp_in(ship_painter_mpc_solver_capsule* capsu
     free(yref);
     double* W = calloc(NY*NY, sizeof(double));
     // change only the non-zero elements:
-    W[0+(NY) * 0] = 100;
-    W[1+(NY) * 1] = 100;
-    W[2+(NY) * 2] = 200;
+    W[0+(NY) * 0] = 20;
+    W[1+(NY) * 1] = 20;
+    W[2+(NY) * 2] = 50;
     W[7+(NY) * 7] = 10;
     W[8+(NY) * 8] = 10;
     W[9+(NY) * 9] = 10;
-    W[10+(NY) * 10] = 0.1;
-    W[11+(NY) * 11] = 1;
-    W[12+(NY) * 12] = 1;
-    W[13+(NY) * 13] = 0.5;
+    W[10+(NY) * 10] = 0.5;
+    W[11+(NY) * 11] = 10;
+    W[12+(NY) * 12] = 10;
+    W[13+(NY) * 13] = 5;
 
     for (int i = 1; i < N; i++)
     {
@@ -536,9 +536,9 @@ void ship_painter_mpc_acados_setup_nlp_in(ship_painter_mpc_solver_capsule* capsu
 
     double* W_e = calloc(NYN*NYN, sizeof(double));
     // change only the non-zero elements:
-    W_e[0+(NYN) * 0] = 100;
-    W_e[1+(NYN) * 1] = 100;
-    W_e[2+(NYN) * 2] = 200;
+    W_e[0+(NYN) * 0] = 20;
+    W_e[1+(NYN) * 1] = 20;
+    W_e[2+(NYN) * 2] = 50;
     W_e[7+(NYN) * 7] = 10;
     W_e[8+(NYN) * 8] = 10;
     W_e[9+(NYN) * 9] = 10;
@@ -624,14 +624,14 @@ void ship_painter_mpc_acados_setup_nlp_in(ship_painter_mpc_solver_capsule* capsu
     double* lubu = calloc(2*NBU, sizeof(double));
     double* lbu = lubu;
     double* ubu = lubu + NBU;
-    lbu[0] = 2;
-    ubu[0] = 20;
-    lbu[1] = -3;
-    ubu[1] = 3;
-    lbu[2] = -3;
-    ubu[2] = 3;
-    lbu[3] = -2;
-    ubu[3] = 2;
+    lbu[0] = 1;
+    ubu[0] = 19;
+    lbu[1] = -2.5;
+    ubu[1] = 2.5;
+    lbu[2] = -2.5;
+    ubu[2] = 2.5;
+    lbu[3] = -1.5;
+    ubu[3] = 1.5;
 
     for (int i = 0; i < N; i++)
     {

@@ -10,7 +10,7 @@
     <!-- 仿真环境参数 -->
     <arg name="est" default="ekf2"/>
     <arg name="vehicle" default="iris"/>
-    <arg name="world" default="$(find ship_painter)/worlds/ship.world"/>
+    <arg name="world" default="$(find ship_painter)/worlds/ship_wall.world"/>
     <arg name="sdf" default="$(find mavlink_sitl_gazebo)/models/iris_stereo_camera/iris_stereo_camera.sdf"/>
 
     <!-- 船体模型参数（可配置） -->
