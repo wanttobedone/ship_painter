@@ -11,7 +11,7 @@
         <param name="mavros_ns" value="$(arg mavros_ns)"/>
 
         <!-- STL模型路径 -->
-        <param name="model_path" value="$(find ship_painter)/models/model4cube.stl"/>
+        <param name="model_path" value="$(find ship_painter)/models/test.stl"/>
 
         <!-- 路径规划参数 -->
         <param name="alpha_shape_value" value="2"/>
@@ -68,9 +68,7 @@
             </include>
         </group> -->
 
-    <!-- ======================================== -->
     <!-- MPC控制器 (输出加速度，由thrust_mapper转换) -->
-    <!-- ======================================== -->
     <node pkg="ship_painter" type="mpc_runner_node"
         name="mpc_runner" output="screen">
 
@@ -95,9 +93,7 @@
         <!-- 注意: Yaw控制已由MPC统一优化，不再需要外部PD参数 -->
     </node>
 
-    <!-- ======================================== -->
     <!-- 推力映射节点 (加速度 -> 油门) -->
-    <!-- ======================================== -->
     <node pkg="ship_painter" type="thrust_mapper_node"
         name="thrust_mapper" output="screen">
 

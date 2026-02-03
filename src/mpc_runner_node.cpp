@@ -235,6 +235,11 @@ MPCRunner::MPCRunner()
     // 加载参数
     loadParameters();
 
+    // 【关键修复】将滤波器状态初始化为悬停值，防止MPC接管时推力骤降
+    // 原因：last_thrust_ 初始化为 0，导致第一帧滤波输出 = 0.6*9.81 + 0.4*0 = 5.9
+    // 这会使飞机瞬间失去 40% 升力，触发掉高和电池故障保护
+    last_thrust_ = T_HOVER_;
+
     // 初始化求解器
     if (!initSolver()) {
         ROS_FATAL("Failed to initialize Acados solver!");

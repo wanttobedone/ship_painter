@@ -10,18 +10,18 @@
     <!-- 仿真环境参数 -->
     <arg name="est" default="ekf2"/>
     <arg name="vehicle" default="iris"/>
-    <arg name="world" default="$(find ship_painter)/worlds/ship_wall2.world"/>
+    <arg name="world" default="$(find ship_painter)/worlds/ship_wall.world"/>
     <arg name="sdf" default="$(find mavlink_sitl_gazebo)/models/iris_stereo_camera/iris_stereo_camera.sdf"/>
 
     <!-- 船体模型参数（可配置） -->
     <!-- 模型选择 - 可通过命令行参数覆盖，例如: roslaunch ship_painter boat.launch model_name:=test_ship -->
-    <arg name="model_name" default="test" doc="model_for_demo"/>
-    <arg name="model_stl" default="$(find ship_painter)/models/test.stl" doc="STL文件路径（用于几何边界计算）"/>
-    <arg name="model_sdf" default="$(find ship_painter)/models/test.sdf" doc="SDF文件路径（用于Gazebo生成）"/>
+    <arg name="model_name" default="target_ship" doc="Gazebo中模型的名称"/>
+    <arg name="model_stl" default="$(find ship_painter)/models/model4cube.stl" doc="STL文件路径（用于几何边界计算）"/>
+    <arg name="model_sdf" default="$(find ship_painter)/models/model4cube.sdf" doc="SDF文件路径（用于Gazebo生成）"/>
 
     <!-- 路径规划基准距离 - 必须与boat2.launch中的path_offset_distance保持一致 -->
     <arg name="path_offset_dist" default="5.0" doc="物体表面距离无人机起点的距离(米)"/>
-    <arg name="spray_dist" default="1.0"/>
+    <arg name="spray_dist" default="0.5"/>
 
     <!-- PX4 SITL 仿真核心 -->
     <!-- 启动Gazebo、PX4固件、MAVROS通信 -->

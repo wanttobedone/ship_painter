@@ -1,6 +1,6 @@
 Panels:
   - Class: rviz/Displays
-    Help Height: 78
+    Help Height: 85
     Name: Displays
     Property Tree Widget:
       Expanded:
@@ -11,8 +11,9 @@ Panels:
         - /BSpline_runned1
         - /MPC Controller1
         - /VINS System1
-      Splitter Ratio: 0.5
-    Tree Height: 595
+        - /VINS System1/Feature Tracker Image1
+      Splitter Ratio: 0.548872172832489
+    Tree Height: 521
   - Class: rviz/Selection
     Name: Selection
   - Class: rviz/Tool Properties
@@ -63,15 +64,14 @@ Visualization Manager:
         {}
       Queue Size: 100
       Value: false
-      #发布无人机实际轨迹
     - Class: rviz/Marker
-      Enabled: true
+      Enabled: false
       Marker Topic: /visualization/actual_trajectory
       Name: Actual Trajectory
       Namespaces:
-        actual_trajectory: true
+        {}
       Queue Size: 100
-      Value: true
+      Value: false
     - Class: rviz/MarkerArray
       Enabled: false
       Marker Topic: /visualization/pointcloud
@@ -179,19 +179,19 @@ Visualization Manager:
       Update Interval: 0
       Value: false
     - Class: rviz/Marker
-      Enabled: true
+      Enabled: false
       Marker Topic: /visualization/model
       Name: Model
       Namespaces:
-        ship_model: true
+        {}
       Queue Size: 100
-      Value: true
+      Value: false
     - Class: rviz/Marker
       Enabled: true
       Marker Topic: /visualization/current_trajectory
       Name: BSpline_runned
       Namespaces:
-        executed_trajectory: true
+        {}
       Queue Size: 100
       Value: true
     - Class: rviz/Group
@@ -201,21 +201,21 @@ Visualization Manager:
           Marker Topic: /mpc/predicted_trajectory
           Name: MPC Predicted Trajectory
           Namespaces:
-            mpc_prediction: true
+            {}
           Queue Size: 100
           Value: true
         - Alpha: 1
-          Axes Length: 0.3
-          Axes Radius: 0.05
+          Axes Length: 0.30000001192092896
+          Axes Radius: 0.05000000074505806
           Class: rviz/Pose
           Color: 0; 255; 255
           Enabled: true
-          Head Length: 0.15
-          Head Radius: 0.08
+          Head Length: 0.15000000596046448
+          Head Radius: 0.07999999821186066
           Name: Reference Pose
           Queue Size: 10
-          Shaft Length: 0.3
-          Shaft Radius: 0.03
+          Shaft Length: 0.30000001192092896
+          Shaft Radius: 0.029999999329447746
           Shape: Arrow
           Topic: /mpc/reference_pose
           Unreliable: false
@@ -244,31 +244,50 @@ Visualization Manager:
           Topic: /mpc/actual_path
           Unreliable: false
           Value: true
-      Enabled: true
+      Enabled: false
       Name: MPC Controller
     - Class: rviz/Group
       Displays:
-        - Class: rviz/Odometry
-          Angle Tolerance: 0.10000000149011612
-          Color: 255; 85; 0
-          Covariance: false
-          Enabled: true
+        - Angle Tolerance: 0.10000000149011612
+          Class: rviz/Odometry
+          Covariance:
+            Orientation:
+              Alpha: 0.5
+              Color: 255; 255; 127
+              Color Style: Unique
+              Frame: Local
+              Offset: 1
+              Scale: 1
+              Value: true
+            Position:
+              Alpha: 0.30000001192092896
+              Color: 204; 51; 204
+              Scale: 1
+              Value: true
+            Value: false
+          Enabled: false
           Keep: 100
           Name: VINS Odometry
-          Offset:
-            X: 0
-            Y: 0
-            Z: 0
           Position Tolerance: 0.10000000149011612
-          Shape: Arrow
+          Queue Size: 10
+          Shape:
+            Alpha: 1
+            Axes Length: 1
+            Axes Radius: 0.10000000149011612
+            Color: 255; 25; 0
+            Head Length: 0.30000001192092896
+            Head Radius: 0.10000000149011612
+            Shaft Length: 1
+            Shaft Radius: 0.05000000074505806
+            Value: Arrow
           Topic: /vins_estimator/odometry
           Unreliable: false
-          Value: true
-        - Class: rviz/Path
-          Alpha: 1
+          Value: false
+        - Alpha: 1
           Buffer Length: 1
+          Class: rviz/Path
           Color: 0; 255; 0
-          Enabled: true
+          Enabled: false
           Head Diameter: 0.30000001192092896
           Head Length: 0.20000000298023224
           Length: 0.30000001192092896
@@ -287,9 +306,8 @@ Visualization Manager:
           Shaft Length: 0.10000000149011612
           Topic: /vins_estimator/path
           Unreliable: false
-          Value: true
-        - Class: rviz/PointCloud
-          Alpha: 1
+          Value: false
+        - Alpha: 1
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
             Max Value: 10
@@ -297,15 +315,14 @@ Visualization Manager:
             Value: true
           Axis: Z
           Channel Name: intensity
+          Class: rviz/PointCloud
           Color: 255; 255; 255
           Color Transformer: Intensity
           Decay Time: 0
           Enabled: true
           Invert Rainbow: false
           Max Color: 255; 255; 255
-          Max Intensity: 4096
           Min Color: 0; 0; 0
-          Min Intensity: 0
           Name: VINS PointCloud
           Position Transformer: XYZ
           Queue Size: 10
@@ -336,19 +353,19 @@ Visualization Manager:
           Value: true
         - Class: rviz/Image
           Enabled: true
-          Image Topic: /feature_tracker/feature_img
+          Image Topic: /vins_estimator/image_track
           Max Value: 1
           Median window: 5
           Min Value: 0
           Name: Feature Tracker Image
           Normalize Range: true
-          Overlay Alpha: 0.5
           Queue Size: 2
-          Transport Hint: compressed
+          Transport Hint: raw
           Unreliable: false
           Value: true
       Enabled: true
       Name: VINS System
+  Enabled: true
   Global Options:
     Background Color: 48; 48; 48
     Default Light: true
@@ -376,7 +393,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 13.355344772338867
+      Distance: 53.43208312988281
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -384,25 +401,27 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 6.286371231079102
-        Y: 0.3013848662376404
-        Z: -1.1861995458602905
+        X: 4.197794437408447
+        Y: -0.25033333897590637
+        Z: 1.1384347677230835
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.010000467300415
+      Pitch: 0.6150003671646118
       Target Frame: map
-      Yaw: 5.458197116851807
+      Yaw: 5.158199787139893
     Saved: ~
 Window Geometry:
   Displays:
     collapsed: false
-  Height: 824
+  Feature Tracker Image:
+    collapsed: false
+  Height: 1540
   Hide Left Dock: false
   Hide Right Dock: false
-  QMainWindow State: 000000ff00000000fd000000010000000000000191000002defc0200000005fb000000100044006900730070006c006100790073010000003d000002de000000c900fffffffb0000001200530065006c0065006300740069006f006e000000010c0000005c0000005c00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007300000001320000006e0000005c00fffffffb0000000a00560069006500770073000000018c000000cd000000a400fffffffb0000000800540069006d0065000000029c0000007f0000003900ffffff0000059f000002de00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  QMainWindow State: 000000ff00000000fd0000000100000000000002190000059cfc0200000008fb000000100044006900730070006c0061007900730100000047000002a5000000f100fffffffb0000002a004600650061007400750072006500200054007200610063006b0065007200200049006d00610067006501000002f3000002f00000001900fffffffb0000001200530065006c0065006300740069006f006e000000010c0000005c0000006e00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007300000001320000006e0000006e00fffffffb0000000a00560069006500770073000000018c000000cd000000c200fffffffb0000000800540069006d0065000000029c0000007f0000004000fffffffb0000000a0049006d006100670065000000045e000000da0000000000000000fb0000002a004600650061007400750072006500200054007200610063006b0065007200200049006d006100670065000000042e000001b500000000000000000000055c0000059c00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Selection:
     collapsed: false
   Time:
@@ -411,6 +430,6 @@ Window Geometry:
     collapsed: false
   Views:
     collapsed: false
-  Width: 1846
-  X: 72
-  Y: 27
+  Width: 1916
+  X: 1902
+  Y: 166

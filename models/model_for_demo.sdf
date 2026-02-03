@@ -1,0 +1,55 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <model name="1">
+    <pose>0 0 0 0 0 0</pose>
+    <static>true</static>
+    
+    <link name="link">
+      <!-- 视觉外观 -->
+      <visual name="visual">
+        <geometry>
+          <mesh>
+            <uri>model://model_for_demo.dae</uri>
+            <scale>1.0 1.0 1.0</scale>
+          </mesh>
+        </geometry>
+        <!-- 棋盘格纹理材质 - 为VINS提供丰富特征点 -->
+        <material>
+          <ambient>1 1 1 1</ambient>
+          <diffuse>1 1 1 1</diffuse>
+          <specular>0.1 0.1 0.1 1</specular>
+          <emissive>0 0 0 0</emissive>
+          <script>
+            <uri>model://textures/checkerboard_material.material</uri>
+            <name>Checkerboard/Pattern</name>
+          </script>
+        </material>
+      </visual>
+      
+      <!-- 碰撞几何体 - 修改为与视觉模型一致的mesh，防止深度相机穿模 -->
+      <collision name="collision">
+        <geometry>
+          <mesh>
+            <uri>model://model_for_demo.dae</uri>
+            <scale>1.0 1.0 1.0</scale>
+          </mesh>
+        </geometry>
+      </collision>
+      
+      <!-- 物理属性 -->
+      <inertial>
+        <mass>2.409899</mass>
+        <pose>0.999404 0.000000 0.003925 0 0 0</pose>
+        <inertia>
+
+              <ixx>1.612918</ixx>
+              <ixy>0.0</ixy>
+              <ixz>0.0</ixz>
+              <iyy>8.042190</iyy>
+              <iyz>0.0</iyz>
+              <izz>8.035872</izz>
+        </inertia>
+      </inertial>
+    </link>
+  </model>
+</sdf>

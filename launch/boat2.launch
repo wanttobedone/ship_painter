@@ -10,15 +10,15 @@
             <!--虚拟环境话题 暂时改了/iris_0-->
             <param name="mavros_ns" value="/mavros"/>
             <!-- STL模型路径 -->
-            <param name="model_path" value="$(find ship_painter)/models/model4cube.stl"/>
+            <param name="model_path" value="$(find ship_painter)/models/test.stl"/>
 
             <!-- 路径规划参数 -->
-            <param name="alpha_shape_value" value="2"/>
-            <param name="target_sample_count" value="500000"/>
+            <param name="alpha_shape_value" value="5"/>
+            <param name="target_sample_count" value="1000000"/>
             <param name="path_offset_distance" value="5.0"/> <!--真实世界中模型位于无人机前方几米处-->
             <!--步长设置-->
             <param name="resample_spacing" value="0.01" type="double" />
-            <param name="flight_speed" value="0.3"/>        <!-- 巡航速度 (m/s) -->
+            <param name="flight_speed" value="0.4"/>        <!-- 巡航速度 (m/s) -->
             <param name="transition_speed" value="0.003"/>    <!-- 层间过渡速度 (m/s) -->
 
             <!-- rviz中模型位置显示参数 -->
@@ -27,7 +27,7 @@
             <param name="display_model_z" value="0"/>
             
             <!-- 喷涂参数 -->
-            <param name="spray_distance" value="0.5"/>
+            <param name="spray_distance" value="1.0"/>
             <param name="layer_height" value="0.25"/>
 
             <!-- 航点遍历方向参数 -->
@@ -71,7 +71,7 @@
         <!--深度控制参数 -->
         
         <!-- 功能开关 -->
-        <param name="enable_depth_correction" value="true" type="bool"/>
+        <param name="enable_depth_correction" value="false" type="bool"/>
         
         <!-- 目标距离（米） -->
         <param name="target_distance" value="0.6" type="double"/>

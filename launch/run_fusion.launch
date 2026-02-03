@@ -1,6 +1,11 @@
 <launch>
     <arg name="config_path" default="/home/ncu/catkin_ws/src/VINS-Fusion/config/simulation/simulation_config.yaml" />
 
+    <node name="feature_tracker" pkg="vins" type="vins_feature_tracker" output="log">
+        <param name="config_file" type="string" value="$(arg config_path)" />
+        <param name="vins_folder" type="string" value="/home/ncu/catkin_ws/src/VINS-Fusion/" />
+    </node>
+
     <!-- VINS-Fusion Estimator -->
     <node name="vins_estimator" pkg="vins" type="vins_node" output="screen"
           args="$(arg config_path)">
@@ -8,10 +13,10 @@
 
     <!-- VINS to MAVROS Bridge -->
     <!-- Converts VINS odometry to MAVROS vision_pose for PX4 EKF2 fusion -->
-    <node name="vins_to_mavros_bridge" pkg="ship_painter" type="vins_to_mavros_bridge" output="screen">
+    <!-- <node name="vins_to_mavros_bridge" pkg="ship_painter" type="vins_to_mavros_bridge" output="screen">
         <param name="vins_odom_topic" value="/vins_estimator/odometry"/>
         <param name="mavros_vision_topic" value="/mavros/vision_pose/pose"/>
         <param name="output_frame_id" value="map"/>
-    </node>
+    </node> -->
 
 </launch>
