@@ -8,7 +8,7 @@
     <!-- <arg name="fcu_url" default="udp://:14550@192.168.4.1:14550"/> -->
 
     <!-- 机载电脑连接参数 -->
-    <arg name="fcu_port" default="/dev/ttyACM0"/>
+    <arg name="fcu_url" default="/dev/ttyACM0:921600"/>
     
     <!--启动MAVROS-->
     <include file="$(find mavros)/launch/px4.launch">

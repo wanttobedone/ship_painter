@@ -26,6 +26,7 @@
   <build_depend>tf2</build_depend>
   <build_depend>tf2_ros</build_depend>
   <build_depend>tf2_geometry_msgs</build_depend>
+  <build_depend>message_filters</build_depend>
   
   <!-- 添加 PCL 和 Eigen3 系统依赖 -->
   <build_depend>libpcl-dev</build_depend>
@@ -46,6 +47,7 @@
   <exec_depend>tf2_geometry_msgs</exec_depend>
   <exec_depend>rospy</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>message_filters</exec_depend>
 
   <!-- Python依赖 (用于auto_spawn_model.py等脚本) -->
   <exec_depend>python3-trimesh</exec_depend>

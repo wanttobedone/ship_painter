@@ -20,7 +20,7 @@
 
         <!-- 步长设置 -->
         <param name="resample_spacing" value="0.01" type="double" />
-        <param name="flight_speed" value="0.3"/>
+        <param name="flight_speed" value="0.6"/>
         <param name="transition_speed" value="0.003"/>
 
         <!-- rviz中模型位置显示参数 -->
@@ -30,7 +30,7 @@
 
         <!-- 喷涂参数 -->
         <param name="spray_distance" value="0.5"/>
-        <param name="layer_height" value="0.25"/>
+        <param name="layer_height" value="0.5"/>
 
         <!-- 航点遍历方向参数 -->
         <param name="/ship_painter/traverse_clockwise" value="$(arg traverse_clockwise)"/>

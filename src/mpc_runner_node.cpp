@@ -1,13 +1,8 @@
 /**
- * @file mpc_runner_node.cpp
- * @brief MPC-based trajectory tracking controller for Ship Painter UAV
- *
- * 功能说明:
- * - 替代trajectory_server_node，使用NMPC进行轨迹跟踪
+
  * - 输入: B-Spline轨迹、无人机状态
  * - 输出: 推力+角速度指令 (AttitudeTarget)
  *
- * 关键特性:
  * - 全姿态解算（Geometric Construction）：
  *   - 机体Z轴由物理决定（推力方向 = acc - g）
  *   - 机体X轴由任务决定（机头正对墙面法向量）
@@ -17,13 +12,9 @@
  * - 奇异点保护（自由落体、z_b平行x_des等情况）
  * - 求解失败时的安全悬停
  *
- * 升级说明 (2024):
  * - 引入几何构建法计算全姿态（从加速度+法向量）
  * - 移除外部Yaw PD控制器，由MPC统一优化
  * - 保持质量解耦设计（比力接口）
- *
- * @author Claude Code Assistant
- * @date 2024
  */
 
 #include <ros/ros.h>
@@ -125,6 +116,15 @@ private:
     int solve_success_count_;
     int solve_fail_count_;
     ros::Time last_status_print_;
+
+    // ===== [量化比较] 精度统计变量 =====
+    double sum_sq_pos_err_ = 0.0;   // 位置误差平方和 (用于RMSE)
+    double sum_abs_pos_err_ = 0.0;  // 位置误差绝对值和 (用于MAE)
+    double max_pos_err_ = 0.0;      // 最大位置误差记录
+    double sum_sq_yaw_err_ = 0.0;   // Yaw误差平方和
+    double max_yaw_err_ = 0.0;      // 最大Yaw误差
+    int error_sample_count_ = 0;    // 采样点数计数
+    // ===== [量化比较] =====
 
     // 回调函数 =====
     void poseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg);
@@ -414,6 +414,15 @@ void MPCRunner::bsplineCallback(const ship_painter::BsplineLayer::ConstPtr& msg)
 
     layer_end_times_ = msg->layer_end_times;
 
+    // ===== [量化比较] 收到新轨迹时重置统计变量 =====
+    sum_sq_pos_err_ = 0.0;
+    sum_abs_pos_err_ = 0.0;
+    max_pos_err_ = 0.0;
+    sum_sq_yaw_err_ = 0.0;
+    max_yaw_err_ = 0.0;
+    error_sample_count_ = 0;
+    // ===== [量化比较] =====
+
     // 启动轨迹跟踪
     trajectory_active_ = true;
     trajectory_start_time_ = ros::Time::now();
@@ -622,6 +631,30 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
 
             if (current_layer_idx_ >= layers_.size()) {
                 ROS_INFO_ONCE("All layers completed! Hovering...");
+
+                // ===== [量化比较] 轨迹结束时打印精度统计报告 =====
+                if (error_sample_count_ > 0) {
+                    double pos_rmse = std::sqrt(sum_sq_pos_err_ / error_sample_count_);
+                    double pos_mae = sum_abs_pos_err_ / error_sample_count_;
+                    double yaw_rmse = std::sqrt(sum_sq_yaw_err_ / error_sample_count_);
+
+                    ROS_INFO("\n\n========== TRACKING ACCURACY REPORT ==========");
+                    ROS_INFO("Controller: MPC (Model Predictive Control)");
+                    ROS_INFO("Total Samples: %d", error_sample_count_);
+                    ROS_INFO("----------------------------------------------");
+                    ROS_INFO("Position RMSE: %.4f m", pos_rmse);
+                    ROS_INFO("Position MAE : %.4f m", pos_mae);
+                    ROS_INFO("Position MAX : %.4f m", max_pos_err_);
+                    ROS_INFO("----------------------------------------------");
+                    ROS_INFO("Yaw RMSE     : %.4f rad (%.2f deg)", yaw_rmse, yaw_rmse * 180.0 / M_PI);
+                    ROS_INFO("Yaw MAX      : %.4f rad (%.2f deg)", max_yaw_err_, max_yaw_err_ * 180.0 / M_PI);
+                    ROS_INFO("==============================================\n");
+
+                    // 重置计数，防止重复打印
+                    error_sample_count_ = 0;
+                }
+                // ===== [量化比较] =====
+
                 publishHoverCommand();
                 return;
             }
@@ -887,14 +920,30 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
 
         actual_path_.poses.push_back(current_pose);
 
-        // 限制轨迹长度，防止内存无限增长
-        if (actual_path_.poses.size() > MAX_PATH_LENGTH_) {
-            actual_path_.poses.erase(actual_path_.poses.begin());
-        }
-
         actual_path_.header.stamp = ros::Time::now();
         actual_path_pub_.publish(actual_path_);
     }
+
+    // ===== [量化比较] 每帧累积误差统计 =====
+    {
+        Eigen::Vector3d p_ref_stat = traj.getPosition(t);
+        Eigen::Vector3d p_cur_stat(current_state_(0), current_state_(1), current_state_(2));
+        double pos_error_stat = (p_ref_stat - p_cur_stat).norm();
+        double yaw_error_stat = computeYawError(target_yaw, current_yaw);
+
+        // 位置误差统计
+        sum_sq_pos_err_ += pos_error_stat * pos_error_stat;
+        sum_abs_pos_err_ += pos_error_stat;
+        if (pos_error_stat > max_pos_err_) max_pos_err_ = pos_error_stat;
+
+        // Yaw误差统计 (取绝对值)
+        double yaw_err_abs = std::abs(yaw_error_stat);
+        sum_sq_yaw_err_ += yaw_err_abs * yaw_err_abs;
+        if (yaw_err_abs > max_yaw_err_) max_yaw_err_ = yaw_err_abs;
+
+        error_sample_count_++;
+    }
+    // ===== [量化比较] =====
 
     // 定期打印状态
     if ((ros::Time::now() - last_status_print_).toSec() > 2.0) {

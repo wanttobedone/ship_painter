@@ -32,6 +32,7 @@ find_package(catkin REQUIRED COMPONENTS
   tf2_ros
   pcl_ros
   pcl_conversions
+  message_filters
 )
 
 # 查找PCL
@@ -131,11 +132,34 @@ message(STATUS "Found Clipper2 sources: ${CLIPPER2_SOURCES}")
 
 # 添加B样条库
 add_library(bspline src/bspline.cpp)
-target_link_libraries(bspline 
-  ${catkin_LIBRARIES} 
+target_link_libraries(bspline
+  ${catkin_LIBRARIES}
   Eigen3::Eigen)
 target_include_directories(bspline PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+# === 添加 plan_env 建图库 ===
+add_library(plan_env
+  src/plan_env/grid_map.cpp
+  src/plan_env/raycast.cpp
+)
+
+target_link_libraries(plan_env
+  ${catkin_LIBRARIES}
+  ${PCL_LIBRARIES}
+  ${OpenCV_LIBRARIES}
+  Eigen3::Eigen
+)
+
+target_include_directories(plan_env PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+set_target_properties(plan_env PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+  POSITION_INDEPENDENT_CODE ON
 )
 
 # 创建 Clipper2 目标
@@ -425,6 +449,22 @@ add_executable(vins_to_mavros_bridge src/vins_to_mavros_bridge.cpp)
 # 链接库
 target_link_libraries(vins_to_mavros_bridge
   ${catkin_LIBRARIES}
+)
+
+# === GridMap Mapping Node ===
+add_executable(mapping_node src/mapping_node.cpp)
+
+target_link_libraries(mapping_node
+  plan_env
+  ${catkin_LIBRARIES}
+  ${PCL_LIBRARIES}
+  ${OpenCV_LIBRARIES}
+  Eigen3::Eigen
+)
+
+set_target_properties(mapping_node PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
 )
 
 # === 安装Python脚本和Shell脚本 ===

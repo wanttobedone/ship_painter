@@ -18,7 +18,7 @@
             <param name="path_offset_distance" value="5.0"/> <!--真实世界中模型位于无人机前方几米处-->
             <!--步长设置-->
             <param name="resample_spacing" value="0.01" type="double" />
-            <param name="flight_speed" value="0.4"/>        <!-- 巡航速度 (m/s) -->
+            <param name="flight_speed" value="0.6"/>        <!-- 巡航速度 (m/s) -->
             <param name="transition_speed" value="0.003"/>    <!-- 层间过渡速度 (m/s) -->
 
             <!-- rviz中模型位置显示参数 -->
@@ -27,8 +27,8 @@
             <param name="display_model_z" value="0"/>
             
             <!-- 喷涂参数 -->
-            <param name="spray_distance" value="1.0"/>
-            <param name="layer_height" value="0.25"/>
+            <param name="spray_distance" value="0.5"/>
+            <param name="layer_height" value="0.5"/>
 
             <!-- 航点遍历方向参数 -->
             <param name="/ship_painter/traverse_clockwise" value="$(arg traverse_clockwise)"/>

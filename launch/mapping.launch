@@ -1,0 +1,135 @@
+<!--
+  障碍物建图模块，实时环境感知与障碍物建图
+  依赖：
+    - RealSense D455 (深度图)
+    - VINS-Fusion (里程计)
+  可选参数：
+    camera_id:=cam0/cam1  - 选择左/右相机
+    map_size:=20.0        - 地图大小
+-->
+
+<launch>
+  <!-- 参数配置 -->
+
+  <!-- 地图大小 (根据作业范围调整) -->
+  <arg name="map_size_x" default="50.0"/>
+  <arg name="map_size_y" default="50.0"/>
+  <arg name="map_size_z" default="5.0"/>
+
+  <!-- 相机选择: cam0=左相机(infra1), cam1=右相机(infra2) -->
+  <arg name="camera_id" default="cam0"/>
+
+  <!-- 话题配置 -->
+  <arg name="odom_topic" default="/vins_estimator/odometry"/>
+  <arg name="depth_topic" default="/camera/depth/image_rect_raw"/>
+
+  <!-- 调试选项 -->
+  <arg name="show_timing" default="false"/>
+  <arg name="debug" default="false"/>
+
+  <!-- GridMap 建图节点 -->
+  <node pkg="ship_painter" name="mapping_node" type="mapping_node"
+        output="screen" required="true">
+
+    <!-- 话题重映射 -->
+    <remap from="~grid_map/odom" to="$(arg odom_topic)"/>
+    <remap from="~grid_map/depth" to="$(arg depth_topic)"/>
+
+    <!-- 存储话题名称供节点使用 -->
+    <param name="grid_map/odom_topic" value="$(arg odom_topic)"/>
+    <param name="grid_map/depth_topic" value="$(arg depth_topic)"/>
+
+    <!-- 地图基本参数 -->
+    <param name="grid_map/resolution" value="0.1"/>
+    <param name="grid_map/map_size_x" value="$(arg map_size_x)"/>
+    <param name="grid_map/map_size_y" value="$(arg map_size_y)"/>
+    <param name="grid_map/map_size_z" value="$(arg map_size_z)"/>
+
+    <!-- 局部更新范围 (围绕无人机的立方体) -->
+    <param name="grid_map/local_update_range_x" value="5.0"/>
+    <param name="grid_map/local_update_range_y" value="5.0"/>
+    <param name="grid_map/local_update_range_z" value="3.0"/>
+
+    <!-- 障碍物膨胀半径 (根据无人机大小调整) -->
+    <param name="grid_map/obstacles_inflation" value="0.3"/>
+
+    <!-- 地图边界参数 -->
+    <param name="grid_map/local_map_margin" value="10"/>
+    <param name="grid_map/ground_height" value="-0.1"/>
+
+    <!-- 相机内参 -->
+    <!-- 从 VINS 标定数据获取 -->
+    <!-- 左相机 (cam0/infra1) 内参 -->
+    <param name="grid_map/cx" value="429.418" if="$(eval camera_id == 'cam0')"/>
+    <param name="grid_map/cy" value="236.953" if="$(eval camera_id == 'cam0')"/>
+    <param name="grid_map/fx" value="443.035" if="$(eval camera_id == 'cam0')"/>
+    <param name="grid_map/fy" value="442.226" if="$(eval camera_id == 'cam0')"/>
+
+    <!-- 右相机 (cam1/infra2) 内参 -->
+    <param name="grid_map/cx" value="424.709" if="$(eval camera_id == 'cam1')"/>
+    <param name="grid_map/cy" value="235.675" if="$(eval camera_id == 'cam1')"/>
+    <param name="grid_map/fx" value="444.017" if="$(eval camera_id == 'cam1')"/>
+    <param name="grid_map/fy" value="443.050" if="$(eval camera_id == 'cam1')"/>
+
+    <!-- 相机外参 (camera → body) -->
+    <!-- 来自 VINS-Fusion 标定数据 -->
+    <!-- 说明：虽然 VINS 中命名为 body_T_cam，但实际是 cam→body -->
+
+    <!-- cam0 → body (左相机到飞控) -->
+    <rosparam param="grid_map/cam2body" if="$(eval camera_id == 'cam0')">
+      [0.062666610, -0.010221698, 0.997982171, 0.051296385,
+       -0.998025330, -0.004933355, 0.062618791, 0.043388154,
+       0.004283325, -0.999935585, -0.010510672, -0.035226004,
+       0.000000000, 0.000000000, 0.000000000, 1.000000000]
+    </rosparam>
+
+    <!-- cam1 → body (右相机到飞控) -->
+    <rosparam param="grid_map/cam2body" if="$(eval camera_id == 'cam1')">
+      [0.073957989, -0.008101804, 0.997228445, 0.057315018,
+       -0.997257065, -0.003534012, 0.073931401, -0.051258354,
+       0.002925237, -0.999960940, -0.008340956, -0.035012226,
+       0.000000000, 0.000000000, 0.000000000, 1.000000000]
+    </rosparam>
+
+    <!-- 深度图滤波参数 -->
+    <param name="grid_map/use_depth_filter" value="true"/>
+    <param name="grid_map/depth_filter_tolerance" value="0.15"/>
+    <param name="grid_map/depth_filter_maxdist" value="5.0"/>    <!-- 最远检测 5m -->
+    <param name="grid_map/depth_filter_mindist" value="0.3"/>    <!-- 最近检测 0.3m -->
+    <param name="grid_map/depth_filter_margin" value="2"/>
+    <param name="grid_map/k_depth_scaling_factor" value="1000.0"/> <!-- RealSense 深度缩放 -->
+    <param name="grid_map/skip_pixel" value="2"/>                 <!-- 跳像素加速 -->
+
+    <!-- 概率占据建图参数 -->
+    <param name="grid_map/p_hit" value="0.70"/>
+    <param name="grid_map/p_miss" value="0.35"/>
+    <param name="grid_map/p_min" value="0.12"/>
+    <param name="grid_map/p_max" value="0.90"/>
+    <param name="grid_map/p_occ" value="0.80"/>
+    <param name="grid_map/min_ray_length" value="0.2"/>
+    <param name="grid_map/max_ray_length" value="5.0"/>
+
+    <!-- 可视化参数 -->
+    <param name="grid_map/virtual_ceil_height" value="3.0"/>
+    <param name="grid_map/visualization_truncate_height" value="2.9"/>
+    <param name="grid_map/show_occ_time" value="$(arg show_timing)"/>
+
+    <!-- 系统参数 -->
+    <param name="grid_map/pose_type" value="2"/>  <!-- 2=ODOMETRY -->
+    <param name="grid_map/frame_id" value="world"/>
+
+  </node>
+
+  <!-- 自动启动 Rviz 可视化 -->
+  <!--
+  <node name="rviz" pkg="rviz" type="rviz"
+        args="-d $(find ship_painter)/rviz/mapping.rviz"/>
+  -->
+
+  <!-- 调试信息 -->
+  <group if="$(arg debug)">
+    <node pkg="rqt_graph" type="rqt_graph" name="rqt_graph"/>
+    <node pkg="rqt_topic" type="rqt_topic" name="rqt_topic"/>
+  </group>
+
+</launch>

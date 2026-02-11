@@ -89,6 +89,15 @@ private:
     
     geometry_msgs::PoseStamped current_pose_;
     bool pose_received_;
+
+    // ===== [量化比较] 精度统计变量 =====
+    double sum_sq_pos_err_ = 0.0;   // 位置误差平方和 (用于RMSE)
+    double sum_abs_pos_err_ = 0.0;  // 位置误差绝对值和 (用于MAE)
+    double max_pos_err_ = 0.0;      // 最大位置误差记录
+    double sum_sq_yaw_err_ = 0.0;   // Yaw误差平方和
+    double max_yaw_err_ = 0.0;      // 最大Yaw误差
+    int error_sample_count_ = 0;    // 采样点数计数
+    // ===== [量化比较] END =====
     
     // 控制参数
     bool enable_depth_correction_;
@@ -117,12 +126,15 @@ private:
 
     //相机内参回调函数声明
     void cameraInfoCallback(const sensor_msgs::CameraInfo::ConstPtr& msg);
-    double findNearestParam(const ship_painter::BSpline& traj, 
+    double findNearestParam(const ship_painter::BSpline& traj,
                             const Eigen::Vector3d& current_pos,
                             double hint_param);
-    bool fitPlaneRANSAC(const cv::Mat& depth_image, 
-                        float& distance_out, 
+    bool fitPlaneRANSAC(const cv::Mat& depth_image,
+                        float& distance_out,
                         Eigen::Vector3d& normal_out);
+
+    // ===== [量化比较] 计算Yaw角误差（处理±π跳变）=====
+    double computeYawError(double yaw_ref, double yaw_current);
 };
 
 // 构造函数实现移到类外
@@ -245,6 +257,15 @@ void TrajectoryServer::bsplineCallback(
     // 保存层时间标记
     current_layer_end_times_ = msg->layer_end_times;
 
+    // ===== [量化比较] 收到新轨迹时重置统计变量 =====
+    sum_sq_pos_err_ = 0.0;
+    sum_abs_pos_err_ = 0.0;
+    max_pos_err_ = 0.0;
+    sum_sq_yaw_err_ = 0.0;
+    max_yaw_err_ = 0.0;
+    error_sample_count_ = 0;
+    // ===== [量化比较] END =====
+
     // 启动轨迹跟踪
     trajectory_active_ = true;
     trajectory_start_time_ = ros::Time::now();  //立即开始，不用消息中的start_time
@@ -319,7 +340,30 @@ void TrajectoryServer::controlLoop(const ros::TimerEvent& event) {
             
             if (current_layer_idx_ >= layers_.size()) {
                 ROS_INFO_ONCE("All layers completed! Hovering at final position...");
-    
+
+                // ===== [量化比较] 轨迹结束时打印精度统计报告 =====
+                if (error_sample_count_ > 0) {
+                    double pos_rmse = std::sqrt(sum_sq_pos_err_ / error_sample_count_);
+                    double pos_mae = sum_abs_pos_err_ / error_sample_count_;
+                    double yaw_rmse = std::sqrt(sum_sq_yaw_err_ / error_sample_count_);
+
+                    ROS_INFO("\n\n========== TRACKING ACCURACY REPORT ==========");
+                    ROS_INFO("Controller: PID (Position-Velocity PID)");
+                    ROS_INFO("Total Samples: %d", error_sample_count_);
+                    ROS_INFO("----------------------------------------------");
+                    ROS_INFO("Position RMSE: %.4f m", pos_rmse);
+                    ROS_INFO("Position MAE : %.4f m", pos_mae);
+                    ROS_INFO("Position MAX : %.4f m", max_pos_err_);
+                    ROS_INFO("----------------------------------------------");
+                    ROS_INFO("Yaw RMSE     : %.4f rad (%.2f deg)", yaw_rmse, yaw_rmse * 180.0 / M_PI);
+                    ROS_INFO("Yaw MAX      : %.4f rad (%.2f deg)", max_yaw_err_, max_yaw_err_ * 180.0 / M_PI);
+                    ROS_INFO("==============================================\n");
+
+                    // 重置计数，防止重复打印
+                    error_sample_count_ = 0;
+                }
+                // ===== [量化比较] END =====
+
                 // 获取最后一层的最后位置
                 const auto& last_traj = layers_.back();
                 double last_t = last_traj.getTotalTime();
@@ -423,6 +467,33 @@ void TrajectoryServer::controlLoop(const ros::TimerEvent& event) {
         double yaw = std::atan2(spray_dir.y(), spray_dir.x());
 
 
+
+        // ===== [量化比较] 每帧累积误差统计 =====
+        if (pose_received_) {
+            // 计算位置误差（原始规划位置 vs 当前实际位置）
+            Eigen::Vector3d p_cur_stat(
+                current_pose_.pose.position.x,
+                current_pose_.pose.position.y,
+                current_pose_.pose.position.z);
+            double pos_error_stat = (p - p_cur_stat).norm();
+
+            // 计算Yaw误差
+            double current_yaw_stat = getCurrentYaw();
+            double yaw_error_stat = computeYawError(yaw, current_yaw_stat);
+
+            // 位置误差统计
+            sum_sq_pos_err_ += pos_error_stat * pos_error_stat;
+            sum_abs_pos_err_ += pos_error_stat;
+            if (pos_error_stat > max_pos_err_) max_pos_err_ = pos_error_stat;
+
+            // Yaw误差统计 (取绝对值)
+            double yaw_err_abs = std::abs(yaw_error_stat);
+            sum_sq_yaw_err_ += yaw_err_abs * yaw_err_abs;
+            if (yaw_err_abs > max_yaw_err_) max_yaw_err_ = yaw_err_abs;
+
+            error_sample_count_++;
+        }
+        // ===== [量化比较] END =====
 
         // 发布修正后的目标
         mavros_msgs::PositionTarget target;
@@ -689,6 +760,16 @@ bool TrajectoryServer::checkDepthValid() {
     
     return true;
 }
+
+// ===== [量化比较] 计算Yaw角误差（处理±π跳变）=====
+double TrajectoryServer::computeYawError(double yaw_ref, double yaw_current) {
+    double error = yaw_ref - yaw_current;
+    // 规范化到 [-π, π]
+    while (error > M_PI) error -= 2.0 * M_PI;
+    while (error < -M_PI) error += 2.0 * M_PI;
+    return error;
+}
+// ===== [量化比较] END =====
 
 // 获取当前yaw角（弧度）
 double TrajectoryServer::getCurrentYaw() {

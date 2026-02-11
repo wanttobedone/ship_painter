@@ -5,12 +5,18 @@
         <arg name="enable_infra1" value="true"/>
         <arg name="enable_infra2" value="true"/>
         <arg name="enable_color" value="false"/>
-        <arg name="enable_depth" value="false"/>
+        <arg name="enable_depth" value="true"/>       <!-- 启用深度图用于建图 -->
+        <arg name="align_depth" value="true"/>        <!-- 对齐深度图到红外坐标系 -->
 
         <arg name="enable_sync" value="true"/>
-        
+
         <arg name="infra_width" value="848"/>
         <arg name="infra_height" value="480"/>
         <arg name="infra_fps" value="30"/>
+
+        <!-- 深度图配置 -->
+        <arg name="depth_width" value="848"/>
+        <arg name="depth_height" value="480"/>
+        <arg name="depth_fps" value="30"/>
     </include>
 </launch>
