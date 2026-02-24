@@ -24,7 +24,9 @@
 #include <geometry_msgs/TwistStamped.h>
 #include <mavros_msgs/AttitudeTarget.h>
 #include <visualization_msgs/Marker.h>
+#include <geometry_msgs/Vector3Stamped.h>
 #include <std_msgs/Bool.h>
+#include <ros/package.h>
 
 // B-Spline相关
 #include "ship_painter/Bspline.h"
@@ -43,7 +45,14 @@ extern "C" {
 }
 
 #include <cmath>
+#include <cstdio>
 #include <algorithm>
+#include <memory>
+#include <mutex>
+
+// MDOB 扰动观测器 & 数据集采集
+#include "ship_painter/mdob_estimator.h"
+#include "ship_painter/dataset_collector.h"
 
 class MPCRunner {
 public:
@@ -51,7 +60,7 @@ public:
     ~MPCRunner();
 
 private:
-    // ===== ROS接口 =====
+    //   ROS接口  
     ros::NodeHandle nh_;
     ros::Subscriber pose_sub_;           // 位置+姿态 (ENU世界坐标系)
     ros::Subscriber velocity_sub_;       // 速度 (ENU世界坐标系)
@@ -60,6 +69,7 @@ private:
     ros::Publisher pred_traj_pub_;      // 预测轨迹可视化（参考轨迹，蓝色）
     ros::Publisher mpc_prediction_pub_; // MPC内部预测轨迹可视化（绿色）
     ros::Publisher ref_pose_pub_;       // 参考位姿可视化
+    ros::Publisher mdob_force_pub_;     // MDOB 扰动力箭头可视化
     ros::Publisher actual_path_pub_;    // 实际飞行轨迹
     ros::Timer control_timer_;
 
@@ -67,11 +77,11 @@ private:
     nav_msgs::Path actual_path_;
     static constexpr int MAX_PATH_LENGTH_ = 2000;  // 最大轨迹点数
 
-    // ===== Acados求解器 =====
+    //   Acados求解器  
     ship_painter_mpc_solver_capsule* acados_capsule_;
     bool solver_initialized_;
 
-    // ===== MPC参数 (与generate_mpc.py保持一致!) =====
+    //   MPC参数 (与generate_mpc.py保持一致!)  
     static constexpr int NX_ = 10;      // 状态维度
     static constexpr int NU_ = 4;       // 控制维度
     static constexpr int N_HORIZON_ = 20;  // 预测步数
@@ -84,7 +94,7 @@ private:
     double T_HOVER_;
     double MASS_;
 
-    // ===== 状态变量 =====
+    //   状态变量  
     Eigen::Matrix<double, NX_, 1> current_state_;
     bool pose_received_;
     bool velocity_received_;
@@ -101,42 +111,58 @@ private:
     double last_valid_yaw_;
     static constexpr double YAW_SINGULARITY_THRESHOLD_ = 0.1;  // 法向量xy分量阈值
 
-    // ===== Yaw闭环控制参数 =====
+    //   Yaw闭环控制参数  
     double yaw_kp_;           // Yaw比例增益
     double yaw_kd_;           // Yaw微分增益
     double last_yaw_error_;   // 上一次yaw误差（用于微分）
     double max_yaw_rate_;     // 最大yaw角速度限制
 
-    // ===== 控制输出滤波 =====
+    //   控制输出滤波  
     double filter_alpha_;     // 滤波系数 (0-1, 越小越平滑)
     double last_thrust_;      // 上一次推力
     double last_wx_, last_wy_, last_wz_;  // 上一次角速度
+
+    //   MDOB 扰动观测器 & 数据采集
+    std::unique_ptr<MDOBEstimator> mdob_;
+    std::unique_ptr<DatasetCollector> data_collector_;
+    double last_raw_thrust_cmd_;  // 上一帧 MPC 原始推力输出 (比力 m/s^2)
+
+    //   扰动地面真值订阅 (用于数据集标签)
+    ros::Subscriber wind_gt_sub_;
+    ros::Subscriber body_force_gt_sub_;
+    Eigen::Vector3d wind_gt_world_ = Eigen::Vector3d::Zero();
+    Eigen::Vector3d body_force_gt_body_ = Eigen::Vector3d::Zero();
+    std::mutex wind_gt_mutex_;
+    std::mutex bf_gt_mutex_;
 
     // 统计信息
     int solve_success_count_;
     int solve_fail_count_;
     ros::Time last_status_print_;
 
-    // ===== [量化比较] 精度统计变量 =====
+    //   [量化比较] 精度统计变量  
     double sum_sq_pos_err_ = 0.0;   // 位置误差平方和 (用于RMSE)
     double sum_abs_pos_err_ = 0.0;  // 位置误差绝对值和 (用于MAE)
     double max_pos_err_ = 0.0;      // 最大位置误差记录
     double sum_sq_yaw_err_ = 0.0;   // Yaw误差平方和
     double max_yaw_err_ = 0.0;      // 最大Yaw误差
     int error_sample_count_ = 0;    // 采样点数计数
-    // ===== [量化比较] =====
+    //   [量化比较]  
 
-    // 回调函数 =====
+    // 回调函数  
     void poseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg);
     void velocityCallback(const geometry_msgs::TwistStamped::ConstPtr& msg);
     void bsplineCallback(const ship_painter::BsplineLayer::ConstPtr& msg);
+    void windGtCallback(const geometry_msgs::Vector3Stamped::ConstPtr& msg);
+    void bodyForceGtCallback(const geometry_msgs::Vector3Stamped::ConstPtr& msg);
     void controlLoop(const ros::TimerEvent& event);
 
-    // ===== 辅助函数 =====
+    //   辅助函数  
     void loadParameters();
     bool initSolver();
     void publishHoverCommand();
     void publishPredictedTrajectory(const std::vector<Eigen::Vector3d>& positions);
+    void publishMDOBForceMarker(const Eigen::Vector3d& f_world, const Eigen::Vector3d& drone_pos);
 
     /**
      * @brief 从法向量计算Yaw角，带奇异点保护
@@ -235,10 +261,70 @@ MPCRunner::MPCRunner()
     // 加载参数
     loadParameters();
 
-    // 【关键修复】将滤波器状态初始化为悬停值，防止MPC接管时推力骤降
+    // 将滤波器状态初始化为悬停值，防止MPC接管时推力骤降
     // 原因：last_thrust_ 初始化为 0，导致第一帧滤波输出 = 0.6*9.81 + 0.4*0 = 5.9
     // 这会使飞机瞬间失去 40% 升力，触发掉高和电池故障保护
     last_thrust_ = T_HOVER_;
+    last_raw_thrust_cmd_ = T_HOVER_;
+
+    // 初始化 MDOB 扰动观测器
+    // 质量从参数加载, 执行器时间常数 0.05s, 观测器增益 5.0
+    Eigen::Vector3d Ko(5.0, 5.0, 5.0);
+    mdob_ = std::make_unique<MDOBEstimator>(MASS_, 0.05, Ko);
+    ROS_INFO("MDOB Estimator initialized (mass=%.2f kg, tau=0.05s, Ko=5.0)", MASS_);
+
+    // 数据集自动命名: episode_{NNN}_{mode}_{wind}_{bf}.csv
+    std::string pkg_path = ros::package::getPath("ship_painter");
+    std::string dataset_dir = pkg_path + "/tmp";
+
+    int test_mode = 0;
+    ros::param::get("/mpc_trajectory_tester/test_mode", test_mode);
+    const char* mode_names[] = {"hover", "circle", "yaw_spin", "figure8", "ellipse"};
+    std::string mode_str = (test_mode >= 0 && test_mode <= 4)
+                           ? mode_names[test_mode] : "unknown";
+
+    bool wind_enabled = false;
+    ros::param::get("/wind/enabled", wind_enabled);
+    std::string wind_str = "nowind";
+    if (wind_enabled) {
+        double sx = 1.0, sy = 1.0;
+        ros::param::get("/wind/sigma_x", sx);
+        ros::param::get("/wind/sigma_y", sy);
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "wind_s%.1f", std::sqrt(sx*sx + sy*sy));
+        wind_str = buf;
+    }
+
+    bool bf_enabled = false;
+    ros::param::get("/body_force/enabled", bf_enabled);
+    std::string bf_str = "nobf";
+    if (bf_enabled) {
+        double fx = -5.0;
+        ros::param::get("/body_force/force_x", fx);
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "bf%.1f", std::abs(fx));
+        bf_str = buf;
+    }
+
+    int episode_num = 0;
+    while (true) {
+        char probe[512];
+        std::snprintf(probe, sizeof(probe), "%s/episode_%03d_%s_%s_%s.csv",
+                      dataset_dir.c_str(), episode_num, mode_str.c_str(),
+                      wind_str.c_str(), bf_str.c_str());
+        FILE* f = std::fopen(probe, "r");
+        if (!f) break;
+        std::fclose(f);
+        episode_num++;
+    }
+
+    char filename[512];
+    std::snprintf(filename, sizeof(filename), "%s/episode_%03d_%s_%s_%s.csv",
+                  dataset_dir.c_str(), episode_num, mode_str.c_str(),
+                  wind_str.c_str(), bf_str.c_str());
+    std::string save_path(filename);
+    data_collector_ = std::make_unique<DatasetCollector>(save_path);
+    ROS_INFO("Dataset: %s", save_path.c_str());
 
     // 初始化求解器
     if (!initSolver()) {
@@ -251,7 +337,7 @@ MPCRunner::MPCRunner()
     std::string mavros_ns;
     nh_.param<std::string>("mavros_ns", mavros_ns, "/mavros");
 
-    // ===== 订阅者 =====
+    //   订阅者  
     // 位置+姿态 (ENU世界坐标系) - 与trajectory_server一致
     pose_sub_ = nh_.subscribe(mavros_ns + "/local_position/pose", 1,
         &MPCRunner::poseCallback, this);
@@ -264,7 +350,13 @@ MPCRunner::MPCRunner()
     bspline_sub_ = nh_.subscribe("/planning/bspline_layers", 1,
         &MPCRunner::bsplineCallback, this);
 
-    // ===== 发布者 =====
+    // 扰动地面真值 (用于数据集标签，无发布时缓存保持零值)
+    wind_gt_sub_ = nh_.subscribe("/gazebo/wind_force_gt", 1,
+        &MPCRunner::windGtCallback, this);
+    body_force_gt_sub_ = nh_.subscribe("/gazebo/body_force_gt", 1,
+        &MPCRunner::bodyForceGtCallback, this);
+
+    //   发布者
     // AttitudeTarget: 发送比力（加速度）+角速度 到推力映射节点
     // 注意：thrust 字段是加速度 (m/s²)，由 thrust_mapper_node 转换为油门
     ctrl_pub_ = nh_.advertise<mavros_msgs::AttitudeTarget>(
@@ -287,7 +379,11 @@ MPCRunner::MPCRunner()
         "/mpc/actual_path", 1);
     actual_path_.header.frame_id = "map";
 
-    // ===== 控制定时器 =====
+    // MDOB 扰动力箭头可视化
+    mdob_force_pub_ = nh_.advertise<visualization_msgs::Marker>(
+        "/mpc/mdob_force", 1);
+
+    //   控制定时器  
     // 50Hz控制频率 (与MPC步长匹配: dt = 0.05s = 50Hz)
     double control_rate;
     nh_.param<double>("control_rate", control_rate, 50.0);
@@ -308,8 +404,15 @@ MPCRunner::MPCRunner()
     ROS_INFO("  Output filter alpha: %.2f", filter_alpha_);
 }
 
-// ===== 析构函数 =====
+//   析构函数  
 MPCRunner::~MPCRunner() {
+    // 落盘 MDOB 数据集
+    if (data_collector_) {
+        data_collector_->flush();
+        ROS_INFO("MDOB dataset flushed: %zu frames saved to /tmp/uav_disturbance_dataset.csv",
+                 data_collector_->size());
+    }
+
     if (acados_capsule_ != nullptr) {
         ship_painter_mpc_acados_free(acados_capsule_);
         ship_painter_mpc_acados_free_capsule(acados_capsule_);
@@ -318,7 +421,7 @@ MPCRunner::~MPCRunner() {
              solve_success_count_, solve_fail_count_);
 }
 
-// ===== 加载参数 =====
+//   加载参数  
 void MPCRunner::loadParameters() {
     // 物理参数 (必须与generate_mpc.py一致!)
     // 注意: 推力使用比力(specific thrust = 加速度 m/s²), 不是力(N)!
@@ -338,7 +441,7 @@ void MPCRunner::loadParameters() {
     nh_.param<double>("filter_alpha", filter_alpha_, 0.5);
 }
 
-// ===== 初始化Acados求解器 =====
+//   初始化Acados求解器  
 bool MPCRunner::initSolver() {
     acados_capsule_ = ship_painter_mpc_acados_create_capsule();
     if (acados_capsule_ == nullptr) {
@@ -357,7 +460,7 @@ bool MPCRunner::initSolver() {
     return true;
 }
 
-// ===== Pose回调 (位置+姿态, ENU世界坐标系) =====
+//   Pose回调 (位置+姿态, ENU世界坐标系)  
 void MPCRunner::poseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg) {
     // 位置 (ENU)
     current_state_(0) = msg->pose.position.x;
@@ -373,7 +476,7 @@ void MPCRunner::poseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg) {
     pose_received_ = true;
 }
 
-// ===== Velocity回调 (速度, ENU世界坐标系) =====
+//   Velocity回调 (速度, ENU世界坐标系)  
 void MPCRunner::velocityCallback(const geometry_msgs::TwistStamped::ConstPtr& msg) {
     // 速度 (ENU世界坐标系, 不是机体坐标系!)
     current_state_(7) = msg->twist.linear.x;
@@ -383,7 +486,18 @@ void MPCRunner::velocityCallback(const geometry_msgs::TwistStamped::ConstPtr& ms
     velocity_received_ = true;
 }
 
-// ===== B-Spline轨迹回调 =====
+//   扰动地面真值回调 (用于数据集标签)
+void MPCRunner::windGtCallback(const geometry_msgs::Vector3Stamped::ConstPtr& msg) {
+    std::lock_guard<std::mutex> lk(wind_gt_mutex_);
+    wind_gt_world_ << msg->vector.x, msg->vector.y, msg->vector.z;
+}
+
+void MPCRunner::bodyForceGtCallback(const geometry_msgs::Vector3Stamped::ConstPtr& msg) {
+    std::lock_guard<std::mutex> lk(bf_gt_mutex_);
+    body_force_gt_body_ << msg->vector.x, msg->vector.y, msg->vector.z;
+}
+
+//   B-Spline轨迹回调
 void MPCRunner::bsplineCallback(const ship_painter::BsplineLayer::ConstPtr& msg) {
     layers_.clear();
 
@@ -414,14 +528,14 @@ void MPCRunner::bsplineCallback(const ship_painter::BsplineLayer::ConstPtr& msg)
 
     layer_end_times_ = msg->layer_end_times;
 
-    // ===== [量化比较] 收到新轨迹时重置统计变量 =====
+    //   [量化比较] 收到新轨迹时重置统计变量  
     sum_sq_pos_err_ = 0.0;
     sum_abs_pos_err_ = 0.0;
     max_pos_err_ = 0.0;
     sum_sq_yaw_err_ = 0.0;
     max_yaw_err_ = 0.0;
     error_sample_count_ = 0;
-    // ===== [量化比较] =====
+    //   [量化比较]  
 
     // 启动轨迹跟踪
     trajectory_active_ = true;
@@ -431,7 +545,7 @@ void MPCRunner::bsplineCallback(const ship_painter::BsplineLayer::ConstPtr& msg)
     ROS_INFO("MPC Runner: Loaded %zu trajectory layers", layers_.size());
 }
 
-// ===== 从法向量计算Yaw角（带奇异点保护）=====
+//   从法向量计算Yaw角（带奇异点保护） 
 double MPCRunner::computeYawFromNormal(const Eigen::Vector3d& normal) {
     // 喷涂方向 = 法向量取反（朝向表面）
     Eigen::Vector3d spray_dir = -normal;
@@ -452,7 +566,7 @@ double MPCRunner::computeYawFromNormal(const Eigen::Vector3d& normal) {
     return yaw;
 }
 
-// ===== 四元数半球一致性检查 =====
+//   四元数半球一致性检查  
 Eigen::Quaterniond MPCRunner::ensureQuaternionHemisphere(
     const Eigen::Quaterniond& q_ref,
     const Eigen::Quaterniond& q_current) {
@@ -465,7 +579,7 @@ Eigen::Quaterniond MPCRunner::ensureQuaternionHemisphere(
     return q_ref;
 }
 
-// ===== 从四元数提取Yaw角 =====
+//   从四元数提取Yaw角  
 double MPCRunner::quaternionToYaw(const Eigen::Quaterniond& q) {
     // ZYX欧拉角分解，提取Yaw
     // yaw = atan2(2*(qw*qz + qx*qy), 1 - 2*(qy² + qz²))
@@ -474,7 +588,7 @@ double MPCRunner::quaternionToYaw(const Eigen::Quaterniond& q) {
     return std::atan2(siny_cosp, cosy_cosp);
 }
 
-// ===== 计算Yaw角误差（处理±π跳变）=====
+//   计算Yaw角误差（处理±π跳变） 
 double MPCRunner::computeYawError(double yaw_ref, double yaw_current) {
     double error = yaw_ref - yaw_current;
 
@@ -485,7 +599,7 @@ double MPCRunner::computeYawError(double yaw_ref, double yaw_current) {
     return error;
 }
 
-// ===== Yaw角PD控制器 =====
+//   Yaw角PD控制器  
 double MPCRunner::yawPDController(double yaw_ref, double yaw_current, double dt) {
     double yaw_error = computeYawError(yaw_ref, yaw_current);
 
@@ -509,12 +623,12 @@ double MPCRunner::yawPDController(double yaw_ref, double yaw_current, double dt)
     return yaw_rate;
 }
 
-// ===== 低通滤波器 =====
+//   低通滤波器  
 double MPCRunner::lowPassFilter(double new_val, double old_val, double alpha) {
     return alpha * new_val + (1.0 - alpha) * old_val;
 }
 
-// ===== 全姿态解算器 (Geometric Construction) =====
+//   全姿态解算器 (Geometric Construction)  
 void MPCRunner::calculateDynamicReference(
     const Eigen::Vector3d& acc,
     const Eigen::Vector3d& jerk,
@@ -523,7 +637,7 @@ void MPCRunner::calculateDynamicReference(
     Eigen::Quaterniond& q_ref,
     Eigen::Vector3d& omega_ref)
 {
-    // ===== 1. 计算合力向量（推力方向）=====
+    //   1. 计算合力向量（推力方向） 
     // ENU坐标系：重力是 (0, 0, -9.8066)
     // 为了抵消重力并产生轨迹加速度：F_thrust = m * (a_traj - g)
     // 比力形式：a_thrust = a_traj - g = a_traj - (0, 0, -9.8066) = a_traj + (0, 0, 9.8066)
@@ -533,7 +647,7 @@ void MPCRunner::calculateDynamicReference(
     // 计算推力大小（比力）
     T_ref = t_vec.norm();
 
-    // ===== 2. 构建机体 Z 轴 (z_b) =====
+    //   2. 构建机体 Z 轴 (z_b)  
     // 安全检查：如果自由落体 (t_vec 接近 0)，保持 Z 轴向上
     if (T_ref < 1e-3) {
         T_ref = T_HOVER_;
@@ -543,11 +657,11 @@ void MPCRunner::calculateDynamicReference(
     }
     Eigen::Vector3d z_b = t_vec.normalized();
 
-    // ===== 3. 确定期望的机头朝向 (x_des) =====
+    //   3. 确定期望的机头朝向 (x_des)  
     // 喷涂任务：机头 (X轴) 指向墙面 => 法向量的反方向
     Eigen::Vector3d x_des = -normal_vec.normalized();
 
-    // ===== 4. 构建机体 Y 轴 (y_b) =====
+    //   4. 构建机体 Y 轴 (y_b)  
     // y_b = z_b × x_des（确保 Y 轴同时垂直于推力方向和期望朝向）
     Eigen::Vector3d y_b_temp = z_b.cross(x_des);
 
@@ -563,11 +677,11 @@ void MPCRunner::calculateDynamicReference(
     }
     Eigen::Vector3d y_b = y_b_temp.normalized();
 
-    // ===== 5. 修正机体 X 轴 (x_b) =====
+    //   5. 修正机体 X 轴 (x_b)  
     // 确保 X, Y, Z 正交
     Eigen::Vector3d x_b = y_b.cross(z_b).normalized();
 
-    // ===== 6. 构建旋转矩阵并转为四元数 =====
+    //   6. 构建旋转矩阵并转为四元数  
     Eigen::Matrix3d R_WB;
     R_WB.col(0) = x_b;
     R_WB.col(1) = y_b;
@@ -576,7 +690,7 @@ void MPCRunner::calculateDynamicReference(
     q_ref = Eigen::Quaterniond(R_WB);
     q_ref.normalize();
 
-    // ===== 7. 计算参考角速度（简化版本）=====
+    //   7. 计算参考角速度（简化版本） 
     // 从 jerk 近似计算 roll/pitch rate
     // 完整公式复杂，这里用简化方案
     if (T_ref > 0.1) {
@@ -594,7 +708,7 @@ void MPCRunner::calculateDynamicReference(
     }
 }
 
-// ===== 主控制循环 =====
+//   主控制循环  
 void MPCRunner::controlLoop(const ros::TimerEvent& event) {
     // 检查前置条件
     if (!solver_initialized_) {
@@ -617,6 +731,35 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
         return;
     }
 
+    //   MDOB 扰动观测器更新（在 MPC 求解之前运行） 
+    // 必须在 trajectory_active_ 检查之后，确保 last_raw_thrust_cmd_ 是 MPC 真实输出
+    {
+        Eigen::Vector3d v_world(current_state_(7), current_state_(8), current_state_(9));
+        Eigen::Quaterniond q_curr(current_state_(3), current_state_(4),
+                                  current_state_(5), current_state_(6));
+
+        double current_time = ros::Time::now().toSec();
+        mdob_->update(current_time, v_world, q_curr, last_raw_thrust_cmd_);
+
+        if (mdob_->isInitialized()) {
+            Eigen::Vector3d f_world = mdob_->getDisturbanceWorld();
+            Eigen::Vector3d f_body  = mdob_->getDisturbanceBody();
+            Eigen::Vector3d v_body  = q_curr.inverse() * v_world;
+
+            Eigen::Vector3d wgt, bfgt;
+            { std::lock_guard<std::mutex> lk(wind_gt_mutex_); wgt = wind_gt_world_; }
+            { std::lock_guard<std::mutex> lk(bf_gt_mutex_);   bfgt = body_force_gt_body_; }
+            data_collector_->recordFrame(current_time,
+                                         f_world, f_body,
+                                         v_world, v_body, q_curr,
+                                         wgt, bfgt);
+
+            // MDOB 力箭头可视化
+            Eigen::Vector3d p_cur(current_state_(0), current_state_(1), current_state_(2));
+            publishMDOBForceMarker(f_world, p_cur);
+        }
+    }
+
     // 计算当前时间
     double t = (ros::Time::now() - trajectory_start_time_).toSec();
 
@@ -632,13 +775,13 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
             if (current_layer_idx_ >= layers_.size()) {
                 ROS_INFO_ONCE("All layers completed! Hovering...");
 
-                // ===== [量化比较] 轨迹结束时打印精度统计报告 =====
+                //   [量化比较] 轨迹结束时打印精度统计报告  
                 if (error_sample_count_ > 0) {
                     double pos_rmse = std::sqrt(sum_sq_pos_err_ / error_sample_count_);
                     double pos_mae = sum_abs_pos_err_ / error_sample_count_;
                     double yaw_rmse = std::sqrt(sum_sq_yaw_err_ / error_sample_count_);
 
-                    ROS_INFO("\n\n========== TRACKING ACCURACY REPORT ==========");
+                    ROS_INFO("\n\n   TRACKING ACCURACY REPORT   ");
                     ROS_INFO("Controller: MPC (Model Predictive Control)");
                     ROS_INFO("Total Samples: %d", error_sample_count_);
                     ROS_INFO("----------------------------------------------");
@@ -648,12 +791,11 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
                     ROS_INFO("----------------------------------------------");
                     ROS_INFO("Yaw RMSE     : %.4f rad (%.2f deg)", yaw_rmse, yaw_rmse * 180.0 / M_PI);
                     ROS_INFO("Yaw MAX      : %.4f rad (%.2f deg)", max_yaw_err_, max_yaw_err_ * 180.0 / M_PI);
-                    ROS_INFO("==============================================\n");
 
                     // 重置计数，防止重复打印
                     error_sample_count_ = 0;
                 }
-                // ===== [量化比较] =====
+                //   [量化比较]  
 
                 publishHoverCommand();
                 return;
@@ -670,7 +812,7 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
         current_state_(3), current_state_(4),
         current_state_(5), current_state_(6));
 
-    // ===== 设置MPC参考轨迹 =====
+    //   设置MPC参考轨迹  
     std::vector<Eigen::Vector3d> pred_positions;  // 用于可视化
     // 在循环外定义并初始化 q_ref_last
     Eigen::Quaterniond q_ref_last = q_current;
@@ -692,7 +834,7 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
 
         pred_positions.push_back(p_ref);
 
-        // ===== 几何构建法计算全姿态 =====
+        //   几何构建法计算全姿态  
         // 输入：轨迹加速度 + 墙面法向量
         // 输出：动态推力、完整姿态四元数（含Roll/Pitch/Yaw）、角速度前馈
         double T_ref_dyn;
@@ -754,7 +896,7 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
         }
     }
 
-    // ===== 设置初始状态约束 =====
+    //   设置初始状态约束  
     ocp_nlp_constraints_model_set(acados_capsule_->nlp_config,
         acados_capsule_->nlp_dims,
         acados_capsule_->nlp_in,
@@ -766,7 +908,7 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
         acados_capsule_->nlp_out,  // 新版Acados API需要nlp_out参数
         0, "ubx", current_state_.data());
 
-    // ===== 求解MPC =====
+    //   求解MPC  
     int status = ship_painter_mpc_acados_solve(acados_capsule_);
 
     if (status != 0) {
@@ -778,7 +920,7 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
 
     solve_success_count_++;
 
-    // ===== 提取并可视化 MPC 内部预测轨迹（绿色线）=====
+    //   提取并可视化 MPC 内部预测轨迹（绿色线） 
     // 这是 MPC 求解器计算出的未来 N 步状态预测
     // 与参考轨迹（蓝色）对比，可以判断是"规划偏差"还是"动力不足"
     {
@@ -822,14 +964,17 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
         mpc_prediction_pub_.publish(pred_line);
     }
 
-    // ===== 提取控制量 u0 = [T, wx, wy, wz] =====
+    //   提取控制量 u0 = [T, wx, wy, wz]  
     double u0[NU_];
     ocp_nlp_out_get(acados_capsule_->nlp_config,
         acados_capsule_->nlp_dims,
         acados_capsule_->nlp_out,
         0, "u", u0);
 
-    // ===== Yaw控制（已由MPC统一优化）=====
+    // 保存 MPC 原始推力输出，供下一帧 MDOB 使用（消除双重滤波）
+    last_raw_thrust_cmd_ = u0[0];
+
+    //   Yaw控制（已由MPC统一优化） 
     // Q_QUAT已激活，MPC直接控制全姿态（含Roll/Pitch/Yaw），无需外挂PD控制器
 
     // 计算当前时刻的参考姿态（用于可视化和日志）
@@ -848,7 +993,7 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
     // 直接使用MPC输出的yaw_rate（不再叠加PD控制）
     double wz_total = u0[3];
 
-    // ===== 控制输出滤波（减少抖动）=====
+    //   控制输出滤波（减少抖动） 
     double thrust_filtered = lowPassFilter(u0[0], last_thrust_, filter_alpha_);
     double wx_filtered = lowPassFilter(u0[1], last_wx_, filter_alpha_);
     double wy_filtered = lowPassFilter(u0[2], last_wy_, filter_alpha_);
@@ -860,7 +1005,7 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
     last_wy_ = wy_filtered;
     last_wz_ = wz_filtered;
 
-    // ===== 发布控制指令（原始加速度，由 thrust_mapper 转换）=====
+    //   发布控制指令（原始加速度，由 thrust_mapper 转换） 
     mavros_msgs::AttitudeTarget cmd;
     cmd.header.stamp = ros::Time::now();
     cmd.header.frame_id = "base_link";
@@ -924,7 +1069,7 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
         actual_path_pub_.publish(actual_path_);
     }
 
-    // ===== [量化比较] 每帧累积误差统计 =====
+    //   [量化比较] 每帧累积误差统计  
     {
         Eigen::Vector3d p_ref_stat = traj.getPosition(t);
         Eigen::Vector3d p_cur_stat(current_state_(0), current_state_(1), current_state_(2));
@@ -943,7 +1088,7 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
 
         error_sample_count_++;
     }
-    // ===== [量化比较] =====
+    //   [量化比较]  
 
     // 定期打印状态
     if ((ros::Time::now() - last_status_print_).toSec() > 2.0) {
@@ -960,7 +1105,7 @@ void MPCRunner::controlLoop(const ros::TimerEvent& event) {
     }
 }
 
-// ===== 发布悬停指令 =====
+//   发布悬停指令  
 void MPCRunner::publishHoverCommand() {
     mavros_msgs::AttitudeTarget cmd;
     cmd.header.stamp = ros::Time::now();
@@ -977,7 +1122,7 @@ void MPCRunner::publishHoverCommand() {
     ctrl_pub_.publish(cmd);
 }
 
-// ===== 发布预测轨迹可视化 =====
+//   发布预测轨迹可视化  
 void MPCRunner::publishPredictedTrajectory(const std::vector<Eigen::Vector3d>& positions) {
     visualization_msgs::Marker marker;
     marker.header.frame_id = "map";
@@ -1004,6 +1149,54 @@ void MPCRunner::publishPredictedTrajectory(const std::vector<Eigen::Vector3d>& p
     }
 
     pred_traj_pub_.publish(marker);
+}
+
+//   发布 MDOB 扰动力可视化箭头  
+void MPCRunner::publishMDOBForceMarker(const Eigen::Vector3d& f_world,
+                                        const Eigen::Vector3d& drone_pos) {
+    double force_mag = f_world.norm();
+
+    // 力极小时不显示，避免噪声闪烁
+    if (force_mag < 0.1) {
+        return;
+    }
+
+    const double SCALE = 0.1;              // 10N = 1m
+    const double MIN_LENGTH = 0.3;
+    const double MAX_LENGTH = 2.5;
+
+    double length = std::clamp(force_mag * SCALE, MIN_LENGTH, MAX_LENGTH);
+    Eigen::Vector3d end_pos = drone_pos + f_world.normalized() * length;
+
+    visualization_msgs::Marker marker;
+    marker.header.frame_id = "map";
+    marker.header.stamp = ros::Time::now();
+    marker.ns = "mdob_estimated_force";
+    marker.id = 0;
+    marker.type = visualization_msgs::Marker::ARROW;
+    marker.action = visualization_msgs::Marker::ADD;
+
+    geometry_msgs::Point p_start, p_end;
+    p_start.x = drone_pos.x(); p_start.y = drone_pos.y(); p_start.z = drone_pos.z();
+    p_end.x = end_pos.x();     p_end.y = end_pos.y();     p_end.z = end_pos.z();
+    marker.points.push_back(p_start);
+    marker.points.push_back(p_end);
+
+    // 两点法 ARROW: scale.x = 轴直径, scale.y = 箭头直径, scale.z = 箭头长度
+    marker.scale.x = 0.05;
+    marker.scale.y = 0.15;
+    marker.scale.z = 0.15;
+
+    // 蓝色半透明
+    marker.color.r = 0.0;
+    marker.color.g = 0.4;
+    marker.color.b = 1.0;
+    marker.color.a = 0.8;
+
+    // 0.1s 后自动消失（防止节点断开后残留）
+    marker.lifetime = ros::Duration(0.1);
+
+    mdob_force_pub_.publish(marker);
 }
 
 int main(int argc, char** argv) {

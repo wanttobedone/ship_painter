@@ -33,6 +33,7 @@ find_package(catkin REQUIRED COMPONENTS
   pcl_ros
   pcl_conversions
   message_filters
+  gazebo_ros
 )
 
 # 查找PCL
@@ -67,6 +68,7 @@ if(NOT CGAL_FOUND)
 endif()
 
 # 查找Eigen
+find_package(gazebo REQUIRED)
 find_package(Eigen3 REQUIRED)
 if(NOT TARGET Eigen3::Eigen)
   add_library(Eigen3::Eigen INTERFACE IMPORTED)
@@ -220,6 +222,10 @@ include_directories(
   ${CLIPPER2_INCLUDE_DIR}
 )
 
+# Gazebo 包含和链接目录
+include_directories(${GAZEBO_INCLUDE_DIRS})
+link_directories(${GAZEBO_LIBRARY_DIRS})
+
 # 链接目录
 link_directories(${PCL_LIBRARY_DIRS})
 
@@ -307,6 +313,8 @@ if(EXISTS ${ACADOS_INCLUDE_DIR}/acados AND EXISTS ${MPC_GEN_DIR})
         # 创建MPC Runner节点
         add_executable(mpc_runner_node
             src/mpc_runner_node.cpp
+            src/mpc/mdob_estimator.cpp
+            src/mpc/dataset_collector.cpp
             ${MPC_GENERATED_SOURCES}
         )
 
@@ -443,6 +451,19 @@ target_link_libraries(hover_test_node
   ${catkin_LIBRARIES}
 )
 
+# === MPC Trajectory Tester Node ===
+add_executable(mpc_trajectory_tester_node src/mpc_trajectory_tester_node.cpp)
+target_link_libraries(mpc_trajectory_tester_node
+  ${catkin_LIBRARIES}
+  bspline
+  Eigen3::Eigen
+)
+add_dependencies(mpc_trajectory_tester_node ${PROJECT_NAME}_generate_messages_cpp)
+set_target_properties(mpc_trajectory_tester_node PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+)
+
 # === VINS to MAVROS Bridge Node ===
 add_executable(vins_to_mavros_bridge src/vins_to_mavros_bridge.cpp)
 
@@ -474,4 +495,26 @@ catkin_install_python(PROGRAMS
   scripts/set_px4_vision_params.py
   scripts/set_px4_vision_params.sh
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
+# === Gazebo Wind Plugin ===
+add_library(world_wind_plugin SHARED src/world_wind_plugin.cpp)
+target_link_libraries(world_wind_plugin
+  ${catkin_LIBRARIES}
+  ${GAZEBO_LIBRARIES}
+)
+set_target_properties(world_wind_plugin PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+)
+
+# === Gazebo Body Force Plugin ===
+add_library(body_force_plugin SHARED src/body_force_plugin.cpp)
+target_link_libraries(body_force_plugin
+  ${catkin_LIBRARIES}
+  ${GAZEBO_LIBRARIES}
+)
+set_target_properties(body_force_plugin PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
 )

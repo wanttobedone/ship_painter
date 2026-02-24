@@ -128,5 +128,19 @@
       <velocityGaussianNoise>0.01 0.01 0.01</velocityGaussianNoise>
     </plugin>
 
+    <!-- Wind Disturbance Plugin (OU Process) -->
+    <!-- 始终加载，但默认不施力。通过 launch 参数 wind_enabled:=true 开启 -->
+    <!-- 所有风力参数从 ROS 参数服务器 /wind/* 读取，由 launch 文件设置 -->
+    <!-- filename 使用绝对路径，避免 GAZEBO_PLUGIN_PATH 被 PX4 launch 覆盖 -->
+    <plugin name="world_wind_plugin" filename="/home/ncu/catkin_ws/devel/lib/libworld_wind_plugin.so">
+      <link_name>iris::base_link</link_name>
+    </plugin>
+
+    <!-- Body Force Plugin (喷枪后坐力等机体系恒力) -->
+    <!-- 参数从 ROS 参数服务器 /body_force/* 读取，由 disturbance.launch 设置 -->
+    <plugin name="body_force_plugin" filename="/home/ncu/catkin_ws/devel/lib/libbody_force_plugin.so">
+      <link_name>iris::base_link</link_name>
+    </plugin>
+
   </model>
 </sdf>

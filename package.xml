@@ -78,6 +78,9 @@
   <build_export_depend>gazebo_msgs</build_export_depend>
   <exec_depend>gazebo_msgs</exec_depend>
 
+  <build_depend>gazebo_ros</build_depend>
+  <exec_depend>gazebo_ros</exec_depend>
+
   <!-- 必须添加的导出标记 -->
   <export>
     <build_type>catkin</build_type>

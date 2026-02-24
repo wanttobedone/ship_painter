@@ -7,11 +7,14 @@
     <!-- 添加模型搜索路径：ship_painter模型 -> 本地下载的模型 -> mavlink_sitl_gazebo模型 -->
     <env name="GAZEBO_MODEL_PATH" value="$(find ship_painter)/models:$(env HOME)/.gazebo/models:$(find mavlink_sitl_gazebo)/models:$(optenv GAZEBO_MODEL_PATH)" />
 
+
     <!-- 仿真环境参数 -->
     <arg name="est" default="ekf2"/>
     <arg name="vehicle" default="iris"/>
     <arg name="world" default="$(find ship_painter)/worlds/ship_wall2.world"/>
-    <arg name="sdf" default="$(find mavlink_sitl_gazebo)/models/iris_stereo_camera/iris_stereo_camera.sdf"/>
+    <!-- iris_vins_fusion.sdf: 包含立体相机、IMU、GPS、风插件、机体力插件 -->
+    <!-- 如果不需要扰动插件且不用VINS，可换回原版: $(find mavlink_sitl_gazebo)/models/iris_stereo_camera/iris_stereo_camera.sdf -->
+    <arg name="sdf" default="$(find ship_painter)/models/iris_vins_fusion.sdf"/>
 
     <!-- 船体模型参数（可配置） -->
     <!-- 模型选择 - 可通过命令行参数覆盖，例如: roslaunch ship_painter boat.launch model_name:=test_ship -->

@@ -1,0 +1,46 @@
+<!--
+  扰动控制 Launch 文件
+  统一管理风扰动（世界系 OU 过程）和机体系恒力（喷枪后坐力等）的参数。
+  由 mpc_test.launch / boat_mpc.launch 通过 <include> 引入。
+
+    无扰动:        (不传参数，默认全关)
+    只开风:        wind_enabled:=true
+    只开后坐力:    body_force_enabled:=true
+    全开:          wind_enabled:=true body_force_enabled:=true
+    自定义风:      wind_enabled:=true wind_sigma_x:=2.0 wind_mu_x:=1.0
+    自定义后坐力:  body_force_enabled:=true body_force_x:=-3.0
+-->
+
+<launch>
+    <!-- 世界系风力 (OU 过程)-->
+    <arg name="wind_enabled" default="true"/>
+    <arg name="wind_theta" default="0.5"/>
+    <arg name="wind_mu_x" default="0.0"/>
+    <arg name="wind_mu_y" default="0.0"/>
+    <arg name="wind_mu_z" default="0.0"/>
+    <arg name="wind_sigma_x" default="1.0"/>
+    <arg name="wind_sigma_y" default="1.0"/>
+    <arg name="wind_sigma_z" default="0.5"/>
+    <arg name="wind_force_max" default="5.0"/>
+
+    <param name="/wind/enabled" type="bool" value="$(arg wind_enabled)"/>
+    <param name="/wind/theta" type="double" value="$(arg wind_theta)"/>
+    <param name="/wind/mu_x" type="double" value="$(arg wind_mu_x)"/>
+    <param name="/wind/mu_y" type="double" value="$(arg wind_mu_y)"/>
+    <param name="/wind/mu_z" type="double" value="$(arg wind_mu_z)"/>
+    <param name="/wind/sigma_x" type="double" value="$(arg wind_sigma_x)"/>
+    <param name="/wind/sigma_y" type="double" value="$(arg wind_sigma_y)"/>
+    <param name="/wind/sigma_z" type="double" value="$(arg wind_sigma_z)"/>
+    <param name="/wind/force_max" type="double" value="$(arg wind_force_max)"/>
+
+    <!-- 机体系恒力 (喷枪后坐力等) -->
+    <arg name="body_force_enabled" default="false"/>
+    <arg name="body_force_x" default="-5.0"/>
+    <arg name="body_force_y" default="0.0"/>
+    <arg name="body_force_z" default="0.0"/>
+
+    <param name="/body_force/enabled" type="bool" value="$(arg body_force_enabled)"/>
+    <param name="/body_force/force_x" type="double" value="$(arg body_force_x)"/>
+    <param name="/body_force/force_y" type="double" value="$(arg body_force_y)"/>
+    <param name="/body_force/force_z" type="double" value="$(arg body_force_z)"/>
+</launch>

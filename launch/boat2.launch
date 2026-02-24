@@ -1,5 +1,4 @@
 <!-- 路径规划与轨迹跟踪节点，发布给底层飞控数据是期望位置/速度/加速度/姿态 -->
-
 <launch>
     
     <arg name="traverse_clockwise" default="true"/><!--true顺时针，false逆时针-->
@@ -57,10 +56,10 @@
         </node>
         <!-- B样条轨迹服务器 -->
         <!-- 先启动深度相机 -->
-<include file="$(find realsense2_camera)/launch/rs_camera.launch">
+<!-- <include file="$(find realsense2_camera)/launch/rs_camera.launch">
     <arg name="align_depth" value="true"/>
     <arg name="enable_pointcloud" value="false"/>
-</include>
+</include> -->
 
 <!-- trajectory_server节点 -->
     <node pkg="ship_painter" type="trajectory_server_node" 

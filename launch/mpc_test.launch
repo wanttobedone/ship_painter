@@ -1,0 +1,114 @@
+<!--
+  MPC 轨迹测试 Launch 文件
+
+  用法:
+    悬停:          roslaunch ship_painter mpc_test.launch test_mode:=0
+    画圆:          roslaunch ship_painter mpc_test.launch test_mode:=1
+    偏航旋转:      roslaunch ship_painter mpc_test.launch test_mode:=2
+    八字飞行:      roslaunch ship_painter mpc_test.launch test_mode:=3
+    椭圆:          roslaunch ship_painter mpc_test.launch test_mode:=4
+
+    加风:          roslaunch ship_painter mpc_test.launch test_mode:=2 wind_enabled:=true
+    加风+后坐力:   roslaunch ship_painter mpc_test.launch test_mode:=2 wind_enabled:=true body_force_enabled:=true
+    自定义风强度:  roslaunch ship_painter mpc_test.launch wind_enabled:=true wind_sigma_x:=2.0 wind_sigma_y:=2.0
+    自定义后坐力:  roslaunch ship_painter mpc_test.launch body_force_enabled:=true body_force_x:=-3.0
+-->
+
+<launch>
+    <!-- ==================== 测试参数 ==================== -->
+    <!-- 0=悬停, 1=画圆, 2=偏航旋转, 3=八字, 4=椭圆 -->
+    <arg name="test_mode" default="0"/>
+    <arg name="hover_height" default="2.0"/>         <!-- 飞行高度 (m) -->
+    <arg name="hover_yaw" default="0.0"/>            <!-- 悬停朝向 (rad), 0=朝东 -->
+    <arg name="stabilize_duration" default="3.0"/>   <!-- 起飞后稳定时间 (s) -->
+    <arg name="mavros_ns" default="/mavros"/>
+
+    <!-- Mode 1: 画圆 -->
+    <arg name="circle_radius" default="3.0"/>        <!-- 半径 (m) -->
+    <arg name="circle_speed" default="0.5"/>         <!-- 线速度 (m/s) -->
+    <arg name="circle_laps" default="2"/>            <!-- 圈数 -->
+
+    <!-- Mode 2: 偏航旋转 -->
+    <arg name="yaw_spin_speed" default="0.5"/>       <!-- 旋转速度 (rad/s) -->
+    <arg name="yaw_spin_laps" default="2"/>          <!-- 往返次数 -->
+
+    <!-- Mode 3: 八字飞行 -->
+    <arg name="figure8_scale" default="2.0"/>        <!-- 振幅 (m) -->
+    <arg name="figure8_speed" default="0.5"/>        <!-- 线速度 (m/s) -->
+    <arg name="figure8_laps" default="2"/>           <!-- 圈数 -->
+
+    <!-- Mode 4: 椭圆 -->
+    <arg name="ellipse_a" default="3.0"/>            <!-- 半长轴 (m) -->
+    <arg name="ellipse_b" default="2.0"/>            <!-- 半短轴 (m) -->
+    <arg name="ellipse_speed" default="0.5"/>        <!-- 线速度 (m/s) -->
+    <arg name="ellipse_laps" default="2"/>           <!-- 圈数 -->
+
+    <!-- ==================== 扰动控制 ==================== -->
+    <arg name="wind_enabled" default="false"/>
+    <arg name="wind_sigma_x" default="1.0"/>
+    <arg name="wind_sigma_y" default="1.0"/>
+    <arg name="body_force_enabled" default="false"/>
+    <arg name="body_force_x" default="-5.0"/>
+
+    <include file="$(find ship_painter)/launch/disturbance.launch">
+        <arg name="wind_enabled" value="$(arg wind_enabled)"/>
+        <arg name="wind_sigma_x" value="$(arg wind_sigma_x)"/>
+        <arg name="wind_sigma_y" value="$(arg wind_sigma_y)"/>
+        <arg name="body_force_enabled" value="$(arg body_force_enabled)"/>
+        <arg name="body_force_x" value="$(arg body_force_x)"/>
+    </include>
+
+    <!-- ==================== 节点 ==================== -->
+
+    <!-- MPC 轨迹测试节点 -->
+    <node name="mpc_trajectory_tester" pkg="ship_painter"
+          type="mpc_trajectory_tester_node" output="screen">
+        <param name="test_mode" value="$(arg test_mode)"/>
+        <param name="hover_height" value="$(arg hover_height)"/>
+        <param name="hover_yaw" value="$(arg hover_yaw)"/>
+        <param name="circle_radius" value="$(arg circle_radius)"/>
+        <param name="circle_speed" value="$(arg circle_speed)"/>
+        <param name="circle_laps" value="$(arg circle_laps)"/>
+        <param name="yaw_spin_speed" value="$(arg yaw_spin_speed)"/>
+        <param name="yaw_spin_laps" value="$(arg yaw_spin_laps)"/>
+        <param name="figure8_scale" value="$(arg figure8_scale)"/>
+        <param name="figure8_speed" value="$(arg figure8_speed)"/>
+        <param name="figure8_laps" value="$(arg figure8_laps)"/>
+        <param name="ellipse_a" value="$(arg ellipse_a)"/>
+        <param name="ellipse_b" value="$(arg ellipse_b)"/>
+        <param name="ellipse_speed" value="$(arg ellipse_speed)"/>
+        <param name="ellipse_laps" value="$(arg ellipse_laps)"/>
+        <param name="stabilize_duration" value="$(arg stabilize_duration)"/>
+        <param name="mavros_ns" value="$(arg mavros_ns)"/>
+    </node>
+
+    <!-- MPC 控制器 -->
+    <node pkg="ship_painter" type="mpc_runner_node"
+          name="mpc_runner" output="screen">
+        <env name="LD_LIBRARY_PATH" value="$(env HOME)/acados/lib:$(optenv LD_LIBRARY_PATH)"/>
+        <param name="mavros_ns" value="$(arg mavros_ns)"/>
+        <param name="thrust_max" value="19.0" type="double"/>
+        <param name="thrust_min" value="2.0" type="double"/>
+        <param name="control_rate" value="100.0" type="double"/>
+        <param name="filter_alpha" value="0.6" type="double"/>
+    </node>
+
+    <!-- 推力映射节点 (加速度 -> 油门) -->
+    <node pkg="ship_painter" type="thrust_mapper_node"
+          name="thrust_mapper" output="screen">
+        <remap from="mpc_cmd" to="/ship_painter/mpc_raw_command"/>
+        <param name="mavros_ns" value="$(arg mavros_ns)"/>
+        <param name="mass" value="1.5" type="double"/>
+        <param name="max_thrust_n" value="28.27" type="double"/>
+        <param name="min_throttle" value="0.05" type="double"/>
+        <param name="max_throttle" value="0.95" type="double"/>
+    </node>
+
+    <!-- RViz 可视化 -->
+    <node name="rviz" pkg="rviz" type="rviz"
+          args="-d $(find ship_painter)/rviz/ship_painter_VINS.rviz"/>
+
+    <!-- TF: world -> map -->
+    <node pkg="tf" type="static_transform_publisher" name="world_to_map"
+          args="0 0 0 0 0 0 world map 100"/>
+</launch>
