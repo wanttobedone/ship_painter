@@ -11,7 +11,7 @@
     <!-- 仿真环境参数 -->
     <arg name="est" default="ekf2"/>
     <arg name="vehicle" default="iris"/>
-    <arg name="world" default="$(find ship_painter)/worlds/ship_wall2.world"/>
+    <arg name="world" default="$(find ship_painter)/worlds/ship.world"/>
     <!-- iris_vins_fusion.sdf: 包含立体相机、IMU、GPS、风插件、机体力插件 -->
     <!-- 如果不需要扰动插件且不用VINS，可换回原版: $(find mavlink_sitl_gazebo)/models/iris_stereo_camera/iris_stereo_camera.sdf -->
     <arg name="sdf" default="$(find ship_painter)/models/iris_vins_fusion.sdf"/>

@@ -46,6 +46,7 @@ extern "C" {
 
 #include <cmath>
 #include <cstdio>
+#include <csignal>
 #include <algorithm>
 #include <memory>
 #include <mutex>
@@ -53,6 +54,9 @@ extern "C" {
 // MDOB 扰动观测器 & 数据集采集
 #include "ship_painter/mdob_estimator.h"
 #include "ship_painter/dataset_collector.h"
+
+// 全局指针用于信号处理中 flush 数据集（防止 SIGSEGV 丢数据）
+static DatasetCollector* g_data_collector_ptr = nullptr;
 
 class MPCRunner {
 public:
@@ -324,6 +328,7 @@ MPCRunner::MPCRunner()
                   wind_str.c_str(), bf_str.c_str());
     std::string save_path(filename);
     data_collector_ = std::make_unique<DatasetCollector>(save_path);
+    g_data_collector_ptr = data_collector_.get();
     ROS_INFO("Dataset: %s", save_path.c_str());
 
     // 初始化求解器
@@ -409,8 +414,8 @@ MPCRunner::~MPCRunner() {
     // 落盘 MDOB 数据集
     if (data_collector_) {
         data_collector_->flush();
-        ROS_INFO("MDOB dataset flushed: %zu frames saved to /tmp/uav_disturbance_dataset.csv",
-                 data_collector_->size());
+        g_data_collector_ptr = nullptr;
+        ROS_INFO("MDOB dataset flushed: %zu frames saved", data_collector_->size());
     }
 
     if (acados_capsule_ != nullptr) {
@@ -1199,14 +1204,31 @@ void MPCRunner::publishMDOBForceMarker(const Eigen::Vector3d& f_world,
     mdob_force_pub_.publish(marker);
 }
 
+// 信号处理: 确保异常退出时也能 flush 数据集
+static void signalHandler(int sig) {
+    if (g_data_collector_ptr) {
+        g_data_collector_ptr->flush();
+        g_data_collector_ptr = nullptr;
+    }
+    ros::shutdown();
+}
+
 int main(int argc, char** argv) {
-    ros::init(argc, argv, "mpc_runner");
+    ros::init(argc, argv, "mpc_runner", ros::init_options::NoSigintHandler);
+
+    // 注册自定义信号处理（SIGINT + SIGSEGV）
+    std::signal(SIGINT, signalHandler);
+    std::signal(SIGSEGV, signalHandler);
 
     try {
         MPCRunner runner;
         ros::spin();
     } catch (const std::exception& e) {
         ROS_FATAL("MPC Runner exception: %s", e.what());
+        if (g_data_collector_ptr) {
+            g_data_collector_ptr->flush();
+            g_data_collector_ptr = nullptr;
+        }
         return 1;
     }
 

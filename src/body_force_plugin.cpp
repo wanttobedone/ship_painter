@@ -63,30 +63,49 @@ private:
     {
         if (!link_ || !nh_) return;
 
-        // 每 1000 步检查一次参数服务器（支持运行时启停）
+        // 每 1000 步检查参数服务器（支持运行时启停 + 参数热更新）
         check_count_++;
         if (check_count_ % 1000 == 0) {
             bool enabled = false;
             nh_->param<bool>("/body_force/enabled", enabled, false);
-            if (enabled && !enabled_) {
+
+            if (!force_pub_) {
+                force_pub_ = nh_->advertise<geometry_msgs::Vector3Stamped>(
+                    "/gazebo/body_force_gt", 10);
+            }
+
+            if (enabled) {
+                // 每次检查都重新读取力参数（支持 episode 间参数变更）
                 double fx, fy, fz;
                 nh_->param<double>("/body_force/force_x", fx, -5.0);
                 nh_->param<double>("/body_force/force_y", fy, 0.0);
                 nh_->param<double>("/body_force/force_z", fz, 0.0);
-                body_force_ = ignition::math::Vector3d(fx, fy, fz);
-                if (!force_pub_) {
-                    force_pub_ = nh_->advertise<geometry_msgs::Vector3Stamped>(
-                        "/gazebo/body_force_gt", 10);
+                auto new_force = ignition::math::Vector3d(fx, fy, fz);
+                if (!enabled_ || new_force != body_force_) {
+                    body_force_ = new_force;
+                    gzmsg << "[BodyForcePlugin] " << (enabled_ ? "UPDATED" : "ENABLED")
+                          << "! force=(" << body_force_ << ")\n";
                 }
                 enabled_ = true;
-                gzmsg << "[BodyForcePlugin] ENABLED! force=(" << body_force_ << ")\n";
-            } else if (!enabled && enabled_) {
+            } else if (enabled_) {
                 enabled_ = false;
                 gzmsg << "[BodyForcePlugin] DISABLED.\n";
             }
         }
 
-        if (!enabled_) return;
+        // disabled 时发布零值 GT（防止订阅者残留旧值）
+        if (!enabled_) {
+            if (force_pub_) {
+                geometry_msgs::Vector3Stamped msg;
+                msg.header.stamp = ros::Time::now();
+                msg.header.frame_id = "body";
+                msg.vector.x = 0.0;
+                msg.vector.y = 0.0;
+                msg.vector.z = 0.0;
+                force_pub_.publish(msg);
+            }
+            return;
+        }
 
         // 机体系恒力
         link_->AddRelativeForce(body_force_);

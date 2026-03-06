@@ -86,21 +86,40 @@ private:
     {
         if (!link_ || !nh_) return;
 
-        // 每 1000 步检查一次参数服务器（支持运行时启停）
+        // 每 1000 步检查参数服务器（支持运行时启停 + 参数热更新）
         check_count_++;
         if (check_count_ % 1000 == 0) {
             bool enabled = false;
             nh_->param<bool>("/wind/enabled", enabled, false);
-            if (enabled && !enabled_) {
-                enabled_ = true;
-                loadParams();
-            } else if (!enabled && enabled_) {
+
+            if (enabled) {
+                if (!enabled_) {
+                    // 首次启用：完整加载参数
+                    enabled_ = true;
+                    loadParams();
+                } else {
+                    // 已启用：热更新 sigma 等参数
+                    reloadParams();
+                }
+            } else if (enabled_) {
                 enabled_ = false;
                 gzmsg << "[WorldWindPlugin] Wind DISABLED.\n";
             }
         }
 
-        if (!enabled_) return;
+        // disabled 时发布零值 GT（防止订阅者残留旧值）
+        if (!enabled_) {
+            if (wind_pub_) {
+                geometry_msgs::Vector3Stamped msg;
+                msg.header.stamp = ros::Time::now();
+                msg.header.frame_id = "world";
+                msg.vector.x = 0.0;
+                msg.vector.y = 0.0;
+                msg.vector.z = 0.0;
+                wind_pub_.publish(msg);
+            }
+            return;
+        }
 
         // === 风力已启用，执行 OU 过程 ===
 
@@ -155,7 +174,7 @@ private:
         nh_->param<double>("/wind/sigma_z", sz, 0.5);
         sigma_ = ignition::math::Vector3d(sx, sy, sz);
 
-        nh_->param<double>("/wind/force_max", force_max_, 5.0);
+        nh_->param<double>("/wind/force_max", force_max_, 2.0);
 
         force_ou_ = mu_;
 
@@ -167,6 +186,32 @@ private:
               << "  theta=" << theta_
               << " mu=(" << mu_ << ") sigma=(" << sigma_ << ")\n"
               << "  force_max=" << force_max_ << "\n";
+    }
+
+    void reloadParams()
+    {
+        double sx, sy, sz;
+        nh_->param<double>("/wind/sigma_x", sx, 1.0);
+        nh_->param<double>("/wind/sigma_y", sy, 1.0);
+        nh_->param<double>("/wind/sigma_z", sz, 0.5);
+        auto new_sigma = ignition::math::Vector3d(sx, sy, sz);
+        if (new_sigma != sigma_) {
+            sigma_ = new_sigma;
+            gzmsg << "[WorldWindPlugin] sigma UPDATED to (" << sigma_ << ")\n";
+        }
+
+        double mx, my, mz;
+        nh_->param<double>("/wind/mu_x", mx, 0.0);
+        nh_->param<double>("/wind/mu_y", my, 0.0);
+        nh_->param<double>("/wind/mu_z", mz, 0.0);
+        auto new_mu = ignition::math::Vector3d(mx, my, mz);
+        if (new_mu != mu_) {
+            std::lock_guard<std::mutex> lock(mu_mutex_);
+            mu_ = new_mu;
+            gzmsg << "[WorldWindPlugin] mu UPDATED to (" << mu_ << ")\n";
+        }
+
+        nh_->param<double>("/wind/force_max", force_max_, 2.0);
     }
 
     void meanCallback(const geometry_msgs::Vector3Stamped::ConstPtr& msg)
@@ -193,7 +238,7 @@ private:
     ignition::math::Vector3d mu_;
     ignition::math::Vector3d sigma_;
     ignition::math::Vector3d force_ou_;
-    double force_max_ = 5.0;
+    double force_max_ = 2.0;
 
     // 随机数
     std::mt19937 gen_;
