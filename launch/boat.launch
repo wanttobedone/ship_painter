@@ -17,17 +17,19 @@
     <arg name="sdf" default="$(find ship_painter)/models/iris_vins_fusion.sdf"/>
 
     <!-- 船体模型参数（可配置） -->
-    <!-- 模型选择 - 可通过命令行参数覆盖，例如: roslaunch ship_painter boat.launch model_name:=test_ship -->
     <arg name="model_name" default="test" doc="model_for_demo"/>
-    <arg name="model_stl" default="$(find ship_painter)/models/test.stl" doc="STL文件路径（用于几何边界计算）"/>
-    <arg name="model_sdf" default="$(find ship_painter)/models/test.sdf" doc="SDF文件路径（用于Gazebo生成）"/>
+    <!-- <arg name="model_name" default="test" doc="model_for_demo"/> -->
+    <arg name="model_stl" default="$(find ship_painter)/models/test.stl"/>
+    <!-- PLY点云工作流：直接用点云文件，不需要STL/SDF -->
+    <arg name="model_path" default="$(find ship_painter)/models/S5_4.ply"/>
 
-    <!-- 路径规划基准距离 - 必须与boat2.launch中的path_offset_distance保持一致 -->
-    <arg name="path_offset_dist" default="5.0" doc="物体表面距离无人机起点的距离(米)"/>
+    <!-- 任务部署参数（统一坐标方案） -->
+    <arg name="mission_forward_distance" default="3.0" doc="目标物近侧到mission0原点的前向距离(m)"/>
+    <arg name="mission_fcu_ground_height" default="0.3" doc="起飞前飞控到地面的高度(m)"/>
+    <arg name="mission_bottom_clearance" default="0.0" doc="底部离地安全间隙(m)"/>
     <arg name="spray_dist" default="1.0"/>
 
     <!-- PX4 SITL 仿真核心 -->
-    <!-- 启动Gazebo、PX4固件、MAVROS通信 -->
     <include file="$(find px4)/launch/mavros_posix_sitl.launch">
         <arg name="est" value="$(arg est)"/>
         <arg name="vehicle" value="$(arg vehicle)"/>
@@ -35,21 +37,18 @@
         <arg name="sdf" value="$(arg sdf)"/>
     </include>
 
-    <!-- 自动对齐船体-->
-    <!--
-      1. 读取STL文件计算几何边界盒 (min_x, max_x, min_y, max_y, min_z, max_z)
-      2. 自动计算Gazebo spawn坐标，确保:
-         - X轴: 物体表面最近点在 X = path_offset_dist + pray_dist
-         - Y轴: 物体几何中心对齐 Y = 0 (无人机正前方)
-         - Z轴: 物体底部直接放在地面 Z = 0
-      3. 生成模型到Gazebo并上传参数到ROS参数服务器
-    -->
+    <!-- auto_spawner: 仅STL/SDF工作流可用，PLY模式下禁用 -->
+    <!-- 如需在Gazebo中显示模型，需提供STL/SDF文件，取消注释并设置model_stl/model_sdf参数 -->
+    
+    <!-- <arg name="model_stl" default="$(find ship_painter)/models/test.stl"/> -->
+    <arg name="model_sdf" default="$(find ship_painter)/models/test.sdf"/>
     <node name="auto_spawner" pkg="ship_painter" type="auto_spawn_model.py" output="screen">
         <param name="stl_path" value="$(arg model_stl)"/>
         <param name="sdf_path" value="$(arg model_sdf)"/>
         <param name="model_name" value="$(arg model_name)"/>
-        <param name="path_offset_distance" value="$(eval arg('path_offset_dist') + arg('spray_dist'))"/>
+        <param name="path_offset_distance" value="$(eval arg('mission_forward_distance') + arg('spray_dist'))"/>
     </node>
+   
 
     <!-- PX4 EKF2 Vision Parameters Configuration -->
     <!--
@@ -71,7 +70,7 @@
         model_name:=test_ship \
         model_stl:=$(find ship_painter)/models/test.stl \
         model_sdf:=$(find ship_painter)/models/test.sdf \
-        path_offset_dist:=3.0
+        mission_forward_distance:=3.0
     -->
 
 </launch>

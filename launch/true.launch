@@ -1,137 +1,19 @@
 <launch>
-    <!-- 真机测试,通过WiFi连接Pixhawk,ESP8266配置：IP 192.168.4.1, Port 14550； raspberry pi：ACM0 -->
-    
-    <!-- 航点遍历方向参数 -->
-    <arg name="traverse_clockwise" default="true"/><!--true顺时针，false逆时针-->
-    
+    <!-- 真机MAVROS连接，单独启动，供其它任务launch复用 -->
+    <!-- 真机测试,通过WiFi连接Pixhawk,ESP8266配置：IP 192.168.4.1, Port 14550； raspberry pi：ACM0 --> 
+
     <!-- WiFi连接参数 -->
     <!-- <arg name="fcu_url" default="udp://:14550@192.168.4.1:14550"/> -->
 
     <!-- 机载电脑连接参数 -->
     <arg name="fcu_url" default="/dev/ttyACM0:921600"/>
-    
+
     <!--启动MAVROS-->
     <include file="$(find mavros)/launch/px4.launch">
         <arg name="fcu_url" value="$(arg fcu_url)"/>
-        <arg name="gcs_url" value=""/>
+        <arg name="gcs_url" value="udp-b://@"/><!--让 MAVROS 在局域网内直接广播-->
         <arg name="tgt_system" value="1"/>
         <arg name="tgt_component" value="1"/>
     </include>
-    
-    <!--启动ship_painter节点（延迟5秒启动-->
-    <node name="ship_painter_node" pkg="ship_painter" type="ship_painter_node" output="screen"
-        launch-prefix="bash -c 'sleep 5; $0 $@'">
-        <param name="mavros_ns" value="/mavros"/><!--真机话题-->
-        
-        <!-- STL模型路径 -->
-        <param name="model_path" value="$(find ship_painter)/models/model4cube.stl"/>
-        
-        <!-- 路径规划参数 -->
-        <param name="alpha_shape_value" value="1.5"/>
-        <param name="target_sample_count" value="500000"/>
-        <param name="path_offset_distance" value="3.0"/> <!--真实世界中模型位于无人机前方几米处-->
-        <!--控制模式参数-->
-        <param name="use_position_control" value="true"/>
-        
-        <!-- 步长设置 -->
-        <param name="resample_spacing" value="0.2" type="double" />
-        <param name="flight_speed" value="0.2"/>        <!-- 巡航速度 (m/s) -->
-        <param name="transition_speed" value="0.003"/>    <!-- 层间过渡速度 (m/s) -->
-            
-        <!-- rviz中模型位置显示参数 -->
-        <param name="display_model_x" value="3.75"/>
-        <param name="display_model_y" value="0"/>
-        <param name="display_model_z" value="0"/>
-        
-        <!-- 喷涂参数 -->
-        <param name="spray_distance" value="0.5"/>
-        <param name="layer_height" value="0.25"/>
-        
-        <!-- 航点遍历方向参数 -->
-        <param name="/ship_painter/traverse_clockwise" value="$(arg traverse_clockwise)"/>
-        
-        <!-- 点云可视化设置 -->
-        <param name="enable_spray_visualization" value="true"/>
-        
-        <!-- Clipper -->
-        <param name="use_clipper_offset" value="true"/>
-        <param name="clipper_offset_precision" value="1.0"/>
-        <param name="min_offset_segment_length" value="0.001"/>
-        
-        <!-- 法向量平滑插值是否开启 -->
-        <param name="enable_normal_smoothing" value="false"/>
-        
-        <!-- 法向量估计参数 -->
-        <param name="voxel_resolution" value="0.03"/>    <!-- 体素大小0.03 -->
-        
-        <!--飞行参数-->
-        <param name="takeoff_height" value="2.0"/>           <!-- 起飞高度：2米 -->
-        <param name="waypoint_tolerance" value="0.1"/>       <!-- 位置容差：0.3米 -->
-        
-        <param name="frame_id" value="world"/>
 
-    <!-- B样条轨迹服务器 -->
-    </node>
-
-        <!-- 启动 RViz 可视化 -->
-    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find ship_painter)/rviz/true_ship_painter.rviz"/>
-
-    <node pkg="ship_painter" type="trajectory_server_node" name="trajectory_server" output="screen">
-    
-    <param name="mavros_ns" value="/mavros" />
-    
-    <!--深度控制参数 -->
-    
-    <!-- 功能开关 -->
-    <param name="enable_depth_correction" value="true" type="bool"/>
-    
-    <!-- 目标距离（米） -->
-    <param name="target_distance" value="0.6" type="double"/>
-    
-    <!-- PID参数（从保守值开始） -->
-    <param name="distance_kp" value="0.8" type="double"/>
-    <param name="distance_ki" value="0.0" type="double"/>
-    <param name="distance_kd" value="0.0" type="double"/>
-    
-    <!-- 修正限制（米） -->
-    <param name="max_correction" value="0.2" type="double"/>
-    
-    <!-- 相机偏移参数（需要实际测量！）-->
-    <!-- 
-        机体坐标系定义：
-        X轴：前（正值=相机在飞控前方）
-        Y轴：右（正值=相机在飞控右侧）
-        Z轴：下（正值=相机在飞控下方）
-        
-        示例：相机在飞控前方10cm，中线上，上方5cm
-    -->
-    <param name="camera_offset_x" value="0.10" type="double"/>  <!-- 前方10cm -->
-    <param name="camera_offset_y" value="0.00" type="double"/>  <!-- 中线 -->
-    <param name="camera_offset_z" value="-0.05" type="double"/> <!-- 上方5cm -->
-    
-    <!--深度数据检查参数  -->
-    <param name="depth_timeout" value="0.5" type="double"/>           <!-- 超时500ms -->
-    <param name="depth_min_range" value="0.3" type="double"/>         <!-- 最小30cm -->
-    <param name="depth_max_range" value="2.0" type="double"/>         <!-- 最大2m -->
-    <param name="depth_jump_threshold" value="0.5" type="double"/>    <!-- 突变阈值50cm -->
-    
-    <!-- 调试输出 -->
-    <param name="debug_output" value="true" type="bool"/>
-
-    <!-- 投影驱动参数 -->
-    <param name="search_window" value="2.0" type="double"/>
-    <param name="lookahead_time" value="0.3" type="double"/>
-    <param name="max_backward_tolerance" value="0.5" type="double"/>
-
-    <!-- 导纳控制参数 -->
-    <param name="offset_max" value="0.5" type="double"/>
-    <param name="offset_leak_rate" value="0.002" type="double"/>
-
-    <!-- RANSAC参数 -->
-    <param name="ransac_max_iterations" value="100" type="int"/>
-    <param name="ransac_distance_threshold" value="0.02" type="double"/>
-    <param name="min_inliers" value="100" type="int"/>
-        
-    </node>
-    
 </launch>

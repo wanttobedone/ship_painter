@@ -24,12 +24,6 @@ public:
         double z_height;         // 层高
         int layer_index;         // 层索引
     };
-    
-    // 生成所有层的B样条轨迹
-    std::vector<BSplineLayer> generateBSplineLayers(
-        const Eigen::Vector3d& model_position,
-        const Eigen::Vector3d& model_rotation
-    );
 
     
     // 生成层间过渡轨迹
@@ -124,9 +118,6 @@ public:
         //
         double alpha_shape_value;      // Alpha Shape参数
         size_t target_sample_count;    // 目标采样点数
-        double model_display_x;        // RViz中模型显示位置
-        double model_display_y;
-        double model_display_z;
 
         double normal_angle_threshold;   // 法向量角度阈值（弧度）
         bool enable_normal_smoothing;    // 是否启用法向量平滑
@@ -160,13 +151,13 @@ public:
     
     // 主要接口
     bool loadSTLModel(const std::string& filename);
-    std::vector<PathLayer> generateSprayPath(
-        const Eigen::Vector3d& model_position,
-        const Eigen::Vector3d& model_rotation = Eigen::Vector3d::Zero()
-    );
-    
-    // 获取模型边界
-    void getModelBounds(Eigen::Vector3d& min_pt, Eigen::Vector3d& max_pt) const;
+    bool loadPLYModel(const std::string& filename);
+
+    // 在原始点云局部坐标系中完成几何规划（不做任何部署变换）
+    std::vector<PathLayer> generateSprayPath();
+
+    // 获取原始点云局部坐标系下的AABB包围盒
+    void getModelBoundsLocal(Eigen::Vector3d& min_pt, Eigen::Vector3d& max_pt) const;
     
 private:
     PlannerConfig config_;

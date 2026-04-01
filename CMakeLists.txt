@@ -445,9 +445,14 @@ target_link_libraries(depth_test_node
   # 添加 hover_test_node 可执行文件
 add_executable(hover_test_node src/hover_test_node.cpp)
 
-
 # 链接库
 target_link_libraries(hover_test_node
+  ${catkin_LIBRARIES}
+)
+
+# 真机飞行测试节点
+add_executable(realtest_node src/realtest_node.cpp)
+target_link_libraries(realtest_node
   ${catkin_LIBRARIES}
 )
 

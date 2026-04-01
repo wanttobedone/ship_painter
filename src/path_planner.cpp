@@ -1,6 +1,7 @@
 #include "ship_painter/path_planner.h"
 #include <ros/ros.h>
 #include <pcl/io/vtk_lib_io.h>
+#include <pcl/io/ply_io.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/filters/statistical_outlier_removal.h>
 #include <pcl/filters/passthrough.h>
@@ -71,6 +72,50 @@ bool PathPlanner::loadSTLModel(const std::string& filename) {
     
     return true;
 }
+bool PathPlanner::loadPLYModel(const std::string& filename) {
+    ROS_INFO("Loading PLY point cloud: %s", filename.c_str());
+
+    if (!boost::filesystem::exists(filename)) {
+        ROS_ERROR("PLY file does not exist: %s", filename.c_str());
+        return false;
+    }
+
+    // 加载PLY为XYZ点云（PLY可能有RGB但我们只需要几何信息）
+    pcl::PointCloud<pcl::PointXYZ>::Ptr xyz_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+    if (pcl::io::loadPLYFile<pcl::PointXYZ>(filename, *xyz_cloud) == -1) {
+        ROS_ERROR("Failed to load PLY file: %s", filename.c_str());
+        return false;
+    }
+
+    ROS_INFO("Loaded %zu points from PLY", xyz_cloud->size());
+
+    // 转换为PointNormal类型（法向量先置零）
+    original_cloud_.reset(new pcl::PointCloud<pcl::PointNormal>);
+    original_cloud_->resize(xyz_cloud->size());
+    for (size_t i = 0; i < xyz_cloud->size(); ++i) {
+        (*original_cloud_)[i].x = (*xyz_cloud)[i].x;
+        (*original_cloud_)[i].y = (*xyz_cloud)[i].y;
+        (*original_cloud_)[i].z = (*xyz_cloud)[i].z;
+        (*original_cloud_)[i].normal_x = 0;
+        (*original_cloud_)[i].normal_y = 0;
+        (*original_cloud_)[i].normal_z = 0;
+    }
+
+    // PLY没有网格拓扑，需要从点云估计法向量
+    estimateSurfaceNormals(original_cloud_);
+    orientNormalsConsistently(original_cloud_);
+
+    ROS_INFO("Surface normals estimated and oriented for %zu points", original_cloud_->size());
+
+    processed_cloud_ = preprocessPointCloud(original_cloud_);
+    model_loaded_ = true;
+
+    ROS_INFO("PLY model loaded: %zu raw points -> %zu processed points",
+             xyz_cloud->size(), processed_cloud_->size());
+
+    return true;
+}
+
 //预处理后点云可视化
 pcl::PointCloud<pcl::PointNormal>::Ptr PathPlanner::getProcessedCloud() const {
     return processed_cloud_;
@@ -80,52 +125,41 @@ pcl::PointCloud<pcl::PointNormal>::Ptr PathPlanner::getOriginalCloud() const {
     return original_cloud_;
 }
 
-std::vector<PathPlanner::PathLayer> PathPlanner::generateSprayPath(const Eigen::Vector3d& model_position, const Eigen::Vector3d& model_rotation) {
-    
+std::vector<PathPlanner::PathLayer> PathPlanner::generateSprayPath() {
+
     std::vector<PathLayer> layers;
-    
+
     if (!model_loaded_) {
         ROS_ERROR("No model loaded!");
         return layers;
     }
-    
-    pcl::PointCloud<pcl::PointNormal>::Ptr transformed_cloud(new pcl::PointCloud<pcl::PointNormal>);
-    *transformed_cloud = *processed_cloud_;
-    
+
+    // 直接在原始局部坐标系中规划，不做任何部署变换
     pcl::PointNormal min_pt, max_pt;
-    pcl::getMinMax3D(*transformed_cloud, min_pt, max_pt);
-    
-    Eigen::Vector3d stl_center((min_pt.x + max_pt.x) / 2.0,
-                               (min_pt.y + max_pt.y) / 2.0,
-                               min_pt.z);
-    
-    Eigen::Vector3d translation = model_position - stl_center;
-    transformPointCloud(transformed_cloud, translation, model_rotation);
-    
-    pcl::getMinMax3D(*transformed_cloud, min_pt, max_pt);
-    
-    ROS_INFO("Model bounds after transform: X[%.3f, %.3f], Y[%.3f, %.3f], Z[%.3f, %.3f]",
+    pcl::getMinMax3D(*processed_cloud_, min_pt, max_pt);
+
+    ROS_INFO("Model bounds (local frame): X[%.3f, %.3f], Y[%.3f, %.3f], Z[%.3f, %.3f]",
              min_pt.x, max_pt.x, min_pt.y, max_pt.y, min_pt.z, max_pt.z);
 
-    // 计算模型中心（所有点的质心）
+    // 计算模型中心（局部系质心）
     model_center_ = Eigen::Vector3d::Zero();
-    for (const auto& pt : transformed_cloud->points) {
+    for (const auto& pt : processed_cloud_->points) {
         model_center_ += Eigen::Vector3d(pt.x, pt.y, pt.z);
     }
     model_center_ /= processed_cloud_->size();
-    
-    ROS_INFO("Model center: [%.2f, %.2f, %.2f]", 
+
+    ROS_INFO("Model center (local): [%.2f, %.2f, %.2f]",
              model_center_.x(), model_center_.y(), model_center_.z());
-    
+
     std::vector<double> layer_heights = computeLayerHeights(min_pt.z, max_pt.z);
-    
-    ROS_INFO("Planning %zu spray layers", layer_heights.size());
-    
+
+    ROS_INFO("Planning %zu spray layers (local frame)", layer_heights.size());
+
     for (size_t i = 0; i < layer_heights.size(); ++i) {
         double z_center = layer_heights[i];
-        
-        pcl::PointCloud<pcl::PointNormal>::Ptr layer_cloud = 
-            extractLayerPoints(transformed_cloud, z_center, 0.05);//同层高度的点，容忍度为0.05
+
+        pcl::PointCloud<pcl::PointNormal>::Ptr layer_cloud =
+            extractLayerPoints(processed_cloud_, z_center, 0.05);
         
         if (layer_cloud->size() < config_.min_points_per_layer) {
             ROS_WARN("Layer %zu at z=%.3f has too few points (%zu), skipping",
@@ -1007,19 +1041,6 @@ void PathPlanner::transformPointCloud(pcl::PointCloud<pcl::PointNormal>::Ptr clo
 }
 
 
-void PathPlanner::getModelBounds(Eigen::Vector3d& min_pt, Eigen::Vector3d& max_pt) const {
-    if (!model_loaded_ || original_cloud_->empty()) {
-        min_pt = max_pt = Eigen::Vector3d::Zero();
-        return;
-    }
-    
-    pcl::PointNormal pcl_min, pcl_max;
-    pcl::getMinMax3D(*original_cloud_, pcl_min, pcl_max);
-    
-    min_pt = Eigen::Vector3d(pcl_min.x, pcl_min.y, pcl_min.z);
-    max_pt = Eigen::Vector3d(pcl_max.x, pcl_max.y, pcl_max.z);
-}
-
 // 计算平均法向量
 Eigen::Vector3d PathPlanner::computeAverageNormal(const std::vector<Eigen::Vector3d>& normals) {
     if (normals.empty()) return Eigen::Vector3d(0, 0, -1);
@@ -1289,49 +1310,17 @@ Eigen::Vector3d PathPlanner::computeContourCenter(const std::vector<Eigen::Vecto
     return center;
 }
 
-std::vector<PathPlanner::BSplineLayer> PathPlanner::generateBSplineLayers(
-    const Eigen::Vector3d& model_position,
-    const Eigen::Vector3d& model_rotation) {
-    
-    std::vector<BSplineLayer> bspline_layers;
-    
-    // 1. 先用原有方法生成航点路径
-    std::vector<PathLayer> path_layers = generateSprayPath(
-        model_position, model_rotation);
-    
-    // 2. 为每层拟合B样条
-    for (size_t i = 0; i < path_layers.size(); i++) {
-        const auto& layer = path_layers[i];
-        
-        if (layer.waypoints.empty()) continue;
-        
-        // 提取位置和法向量
-        std::vector<Eigen::Vector3d> positions;
-        std::vector<Eigen::Vector3d> normals;
-        
-        for (const auto& wp : layer.waypoints) {
-            positions.push_back(wp.position);
-            normals.push_back(wp.surface_normal);
-        }
-        
-        // 拟合B样条（闭合）
-        BSplineLayer bspline_layer;
-        bspline_layer.trajectory.fitFromContour(
-            positions, 
-            normals,
-            config_.flight_speed,  // 使用配置中的速度
-            true  // 闭合
-        );
-        bspline_layer.z_height = layer.z_center;
-        bspline_layer.layer_index = i;
-        
-        bspline_layers.push_back(bspline_layer);
-        
-        ROS_INFO("Layer %zu: B-spline with %.2f seconds", 
-                 i, bspline_layer.trajectory.getTotalTime());
+// getModelBoundsLocal: 返回原始点云在局部坐标系下的AABB
+void PathPlanner::getModelBoundsLocal(Eigen::Vector3d& min_out, Eigen::Vector3d& max_out) const {
+    if (!model_loaded_ || !processed_cloud_ || processed_cloud_->empty()) {
+        min_out = Eigen::Vector3d::Zero();
+        max_out = Eigen::Vector3d::Zero();
+        return;
     }
-    
-    return bspline_layers;
+    pcl::PointNormal min_pt, max_pt;
+    pcl::getMinMax3D(*processed_cloud_, min_pt, max_pt);
+    min_out = Eigen::Vector3d(min_pt.x, min_pt.y, min_pt.z);
+    max_out = Eigen::Vector3d(max_pt.x, max_pt.y, max_pt.z);
 }
 
 ship_painter::BSpline PathPlanner::generateTransition(
