@@ -56,7 +56,7 @@
         <param name="require_rtk" value="false"/>               <!-- 是否要求RTK Fix后才起飞 -->
         <param name="rtk_wait_timeout" value="300.0"/>          <!-- RTK等待超时：5分钟 -->
 
-        <param name="frame_id" value="world"/>
+        <param name="frame_id" value="map"/>
     </node>
 
     <!-- 启动 RViz 可视化（Pi上运行时注释掉，笔记本单独启动RViz） -->

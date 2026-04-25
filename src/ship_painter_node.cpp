@@ -143,7 +143,7 @@ private:
     bool setMode(const std::string& mode);
     bool arm();
     bool disarm();
-    bool takeoff(double height);
+    bool takeoffToMapZ(double target_z_map);
     bool land();
     
     void publishBSplineTrajectories();//B样条轨迹
@@ -1069,29 +1069,46 @@ bool ShipPainterNode::disarm() {
     return false;
 }
 
-bool ShipPainterNode::takeoff(double height) {
-    ROS_INFO("Taking off to %.1f meters...", height);
-    
+bool ShipPainterNode::takeoffToMapZ(double target_z_map) {
+    ROS_INFO("Taking off to map z = %.2f m...", target_z_map);
+
     geometry_msgs::PoseStamped takeoff_pose = flight_state_.current_pose;
-    takeoff_pose.pose.position.z = height;
-    
+    takeoff_pose.header.frame_id = "map";
+    takeoff_pose.pose.position.x = flight_state_.mission0.origin_map.x();
+    takeoff_pose.pose.position.y = flight_state_.mission0.origin_map.y();
+    takeoff_pose.pose.position.z = target_z_map;
+
+    tf2::Quaternion q;
+    q.setRPY(0.0, 0.0, flight_state_.mission0.yaw0);
+    takeoff_pose.pose.orientation.x = q.x();
+    takeoff_pose.pose.orientation.y = q.y();
+    takeoff_pose.pose.orientation.z = q.z();
+    takeoff_pose.pose.orientation.w = q.w();
+
     ros::Rate rate(20);
     while (ros::ok()) {
+        takeoff_pose.header.stamp = ros::Time::now();
         local_pos_pub_.publish(takeoff_pose);
-        
-        double current_height = flight_state_.current_pose.pose.position.z;
-        if (std::abs(current_height - height) < 0.2) {
-            ROS_INFO("Takeoff complete at %.2f meters", current_height);
+
+        double current_z = flight_state_.current_pose.pose.position.z;
+
+        if (std::abs(current_z - target_z_map) < 0.2) {
+            ROS_INFO("Takeoff complete at map z = %.2f m", current_z);
             return true;
         }
-        
-        ROS_INFO_THROTTLE(1, "Taking off... Current: %.2f, Target: %.2f", 
-                          current_height, height);
-        
+
+        ROS_INFO_THROTTLE(
+            1,
+            "Taking off... Current map z: %.2f, Target map z: %.2f, Relative target: %.2f",
+            current_z,
+            target_z_map,
+            target_z_map - flight_state_.mission0.origin_map.z()
+        );
+
         ros::spinOnce();
         rate.sleep();
     }
-    
+
     return false;
 }
 
@@ -1288,9 +1305,12 @@ void ShipPainterNode::run() {
     ROS_INFO("Sending initial setpoints...");
     geometry_msgs::PoseStamped init_pose;
     init_pose.header.frame_id = "map";
+    double takeoff_target_z =
+    flight_state_.mission0.origin_map.z() + params_.takeoff_height;
+
     init_pose.pose.position.x = flight_state_.mission0.origin_map.x();
     init_pose.pose.position.y = flight_state_.mission0.origin_map.y();
-    init_pose.pose.position.z = params_.takeoff_height;
+    init_pose.pose.position.z = takeoff_target_z;
     // 用 mission0.yaw0 构造朝向四元数
     tf2::Quaternion init_q;
     init_q.setRPY(0.0, 0.0, flight_state_.mission0.yaw0);
@@ -1343,12 +1363,13 @@ void ShipPainterNode::run() {
         return;
     }
     
-    // 7. 起飞
-    double first_layer_height = path_layers_.empty() ? 
-                               params_.takeoff_height : 
-                               path_layers_[0].z_center + 0.5;  // 稍高一点以便安全接近
-    
-    if (!takeoff(first_layer_height)) {
+    // 7. 起飞（相对 mission0 原点）
+    if (!path_layers_.empty()) {
+        double layer_approach_z = path_layers_[0].z_center + 0.5;
+        takeoff_target_z = std::max(takeoff_target_z, layer_approach_z);
+    }
+
+    if (!takeoffToMapZ(takeoff_target_z)) {
         ROS_ERROR("Takeoff failed");
         return;
     }
