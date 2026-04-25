@@ -17,15 +17,15 @@
     <arg name="sdf" default="$(find ship_painter)/models/iris_vins_fusion.sdf"/>
 
     <!-- 船体模型参数（可配置） -->
-    <arg name="model_name" default="test" doc="model_for_demo"/>
+    <arg name="model_name" default="S5_4" doc="S5_4 reconstructed mesh"/>
     <!-- <arg name="model_name" default="test" doc="model_for_demo"/> -->
-    <arg name="model_stl" default="$(find ship_painter)/models/test.stl"/>
+    <arg name="model_stl" default="$(find ship_painter)/models/S5_4.stl"/>
     <!-- PLY点云工作流：直接用点云文件，不需要STL/SDF -->
     <arg name="model_path" default="$(find ship_painter)/models/S5_4.ply"/>
 
-    <!-- 任务部署参数（统一坐标方案） -->
+    <!-- 任务部署参数（统一坐标方案） --><!--路径规划参数在boat2.launch里改-->
     <arg name="mission_forward_distance" default="3.0" doc="目标物近侧到mission0原点的前向距离(m)"/>
-    <arg name="mission_fcu_ground_height" default="0.3" doc="起飞前飞控到地面的高度(m)"/>
+    <arg name="mission_fcu_ground_height" default="-0.3" doc="起飞前飞控到地面的高度(m)"/>
     <arg name="mission_bottom_clearance" default="0.0" doc="底部离地安全间隙(m)"/>
     <arg name="spray_dist" default="1.0"/>
 
@@ -41,12 +41,14 @@
     <!-- 如需在Gazebo中显示模型，需提供STL/SDF文件，取消注释并设置model_stl/model_sdf参数 -->
     
     <!-- <arg name="model_stl" default="$(find ship_painter)/models/test.stl"/> -->
-    <arg name="model_sdf" default="$(find ship_painter)/models/test.sdf"/>
+    <arg name="model_sdf" default="$(find ship_painter)/models/S5_4.sdf"/>
     <node name="auto_spawner" pkg="ship_painter" type="auto_spawn_model.py" output="screen">
         <param name="stl_path" value="$(arg model_stl)"/>
         <param name="sdf_path" value="$(arg model_sdf)"/>
         <param name="model_name" value="$(arg model_name)"/>
-        <param name="path_offset_distance" value="$(eval arg('mission_forward_distance') + arg('spray_dist'))"/>
+        <param name="mission_forward_distance" value="$(arg mission_forward_distance)"/>
+        <param name="mission_fcu_ground_height" value="$(arg mission_fcu_ground_height)"/>
+        <param name="mission_bottom_clearance" value="$(arg mission_bottom_clearance)"/>
     </node>
    
 

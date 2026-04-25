@@ -1625,6 +1625,9 @@ void ShipPainterNode::applyMissionTransform(
             wp.approach_dir = R_m * wp.approach_dir;
         }
 
+        // 更新 z_center 到 map 系（R_m 只绕 z 轴旋转，z 分量不变）
+        layer.z_center = o_m.z() + (layer.z_center + t_m.z());
+
         // 重新计算姿态（基于变换后的法向量）
         for (size_t i = 0; i < layer.waypoints.size(); ++i) {
             auto& wp = layer.waypoints[i];
