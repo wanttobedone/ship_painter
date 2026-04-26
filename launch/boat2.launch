@@ -9,7 +9,7 @@
             <!--虚拟环境话题 暂时改了/iris_0-->
             <param name="mavros_ns" value="/mavros"/>
             <!-- 模型路径（支持STL和PLY） -->
-            <param name="model_path" value="$(find ship_painter)/models/S5_3.ply"/>
+            <param name="model_path" value="$(find ship_painter)/models/s101.ply"/>
             <!-- <param name="model_path" value="$(find ship_painter)/models/test.stl"/> -->
 
             <!-- 路径规划参数 -->
@@ -17,7 +17,7 @@
             <param name="target_sample_count" value="1000000"/>
             <!-- 任务部署参数 -->
             <param name="mission_forward_distance" value="3.0"/>
-            <param name="mission_fcu_ground_height" value="-0.3"/>
+            <param name="mission_fcu_ground_height" value="0.3"/>
             <param name="mission_bottom_clearance" value="0.0"/>
             <!--步长设置-->
             <param name="resample_spacing" value="0.01" type="double" />

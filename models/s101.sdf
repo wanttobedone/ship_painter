@@ -1,0 +1,48 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <model name="s101">
+    <pose>0 0 0 0 0 0</pose>
+    <static>true</static>
+
+    <link name="link">
+      <!-- 视觉外观 -->
+      <visual name="visual">
+        <geometry>
+          <mesh>
+            <uri>model://s101.stl</uri>
+            <scale>1.0 1.0 1.0</scale>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.7 0.7 0.75 1</ambient>
+          <diffuse>0.7 0.7 0.75 1</diffuse>
+          <specular>0.3 0.3 0.3 1</specular>
+        </material>
+      </visual>
+
+      <!-- 碰撞几何体 -->
+      <collision name="collision">
+        <geometry>
+          <mesh>
+            <uri>model://s101.stl</uri>
+            <scale>1.0 1.0 1.0</scale>
+          </mesh>
+        </geometry>
+      </collision>
+
+      <!-- 物理属性 (static模型，惯性参数仅占位) -->
+      <inertial>
+        <mass>10.0</mass>
+        <pose>0.0648 -0.1531 0.9742 0 0 0</pose>
+        <inertia>
+          <ixx>5.0</ixx>
+          <ixy>0.0</ixy>
+          <ixz>0.0</ixz>
+          <iyy>5.0</iyy>
+          <iyz>0.0</iyz>
+          <izz>5.0</izz>
+        </inertia>
+      </inertial>
+    </link>
+  </model>
+</sdf>

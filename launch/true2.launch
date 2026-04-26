@@ -10,7 +10,7 @@
         <param name="mavros_ns" value="/mavros"/>
 
         <!-- STL模型路径 -->
-        <param name="model_path" value="$(find ship_painter)/models/model4cube.stl"/>
+        <param name="model_path" value="$(find ship_painter)/models/s101.ply"/>
 
         <!-- 路径规划参数 -->
         <param name="alpha_shape_value" value="1.5"/>

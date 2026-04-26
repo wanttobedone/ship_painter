@@ -1119,7 +1119,10 @@ void ShipPainterNode::run() {
     }
     
     // 等待位置数据和EKF2初始化
-    ROS_INFO("Waiting for position data and EKF2 initialization...");
+    // 等待 local_position/pose 可用
+    // 注意：实机中 PX4 local origin 不一定等于起飞点，
+    // 所以不能用 fabs(z)<2.0 判断 EKF/local pose 是否 ready。
+    ROS_INFO("Waiting for local position data and basic pose validity...");
     ros::Rate rate(20);
     ros::Time ekf_wait_start = ros::Time::now();
     bool ekf_ready = false;
@@ -1128,30 +1131,68 @@ void ShipPainterNode::run() {
         ros::spinOnce();
 
         if (flight_state_.pose_received) {
-            double current_height = flight_state_.current_pose.pose.position.z;
-            if (fabs(current_height) < 2.0) {
+            const auto& p = flight_state_.current_pose.pose.position;
+            const auto& q = flight_state_.current_pose.pose.orientation;
+
+            const double q_norm = std::sqrt(
+                q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w
+            );
+
+            const bool pose_finite =
+                std::isfinite(p.x) &&
+                std::isfinite(p.y) &&
+                std::isfinite(p.z) &&
+                std::isfinite(q.x) &&
+                std::isfinite(q.y) &&
+                std::isfinite(q.z) &&
+                std::isfinite(q.w);
+
+            const bool quat_ok =
+                std::isfinite(q_norm) &&
+                q_norm > 0.7 &&
+                q_norm < 1.3;
+
+            if (pose_finite && quat_ok) {
                 ekf_ready = true;
-                ROS_INFO("EKF2 initialized! Current position: (%.2f, %.2f, %.2f)",
+
+                tf2::Quaternion cur_q(q.x, q.y, q.z, q.w);
+                double roll, pitch, yaw;
+                tf2::Matrix3x3(cur_q).getRPY(roll, pitch, yaw);
+
+                ROS_INFO("Local pose ready: position=(%.2f, %.2f, %.2f), yaw=%.1f deg. "
+                        "mission0 stability will be checked next.",
+                        p.x,
+                        p.y,
+                        p.z,
+                        yaw * 180.0 / M_PI);
+            } else {
+                ROS_WARN_THROTTLE(
+                    5.0,
+                    "Waiting for valid local pose: position=(%.2f, %.2f, %.2f), q_norm=%.3f",
+                    p.x,
+                    p.y,
+                    p.z,
+                    q_norm
+                );
+            }
+        } else {
+            ROS_WARN_THROTTLE(5.0, "Waiting for /mavros/local_position/pose...");
+        }
+
+        if ((ros::Time::now() - ekf_wait_start).toSec() > 30.0) {
+            if (flight_state_.pose_received) {
+                ROS_ERROR("Local pose wait timeout! Current position=(%.2f, %.2f, %.2f)",
                         flight_state_.current_pose.pose.position.x,
                         flight_state_.current_pose.pose.position.y,
                         flight_state_.current_pose.pose.position.z);
             } else {
-                static ros::Time last_warn = ros::Time::now();
-                if ((ros::Time::now() - last_warn).toSec() > 5.0) {
-                    ROS_WARN("Waiting for EKF2... Current height: %.2f m (should be near 0)",
-                            current_height);
-                    last_warn = ros::Time::now();
-                }
+                ROS_ERROR("Local pose wait timeout: no /mavros/local_position/pose received");
             }
-        }
 
-        if ((ros::Time::now() - ekf_wait_start).toSec() > 30.0) {
-            ROS_ERROR("EKF2 initialization timeout! Current height: %.2f m",
-                    flight_state_.current_pose.pose.position.z);
             ROS_ERROR("Please check:");
-            ROS_ERROR("  1. Is the drone on a flat surface?");
-            ROS_ERROR("  2. Is GPS signal good?");
-            ROS_ERROR("  3. Try increasing the launch delay time.");
+            ROS_ERROR("  1. Is MAVROS connected to PX4?");
+            ROS_ERROR("  2. Is /mavros/local_position/pose being published?");
+            ROS_ERROR("  3. Is PX4 EKF producing local position?");
             return;
         }
 
