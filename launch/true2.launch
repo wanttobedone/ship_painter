@@ -10,14 +10,14 @@
         <param name="mavros_ns" value="/mavros"/>
 
         <!-- STL模型路径 -->
-        <param name="model_path" value="$(find ship_painter)/models/s101.ply"/>
+        <param name="model_path" value="$(find ship_painter)/models/s201.ply"/>
 
         <!-- 路径规划参数 -->
         <param name="alpha_shape_value" value="1.5"/>
         <param name="target_sample_count" value="500000"/>
         <!-- 任务部署参数 -->
         <param name="mission_forward_distance" value="3.0"/>
-        <param name="mission_fcu_ground_height" value="0.3"/>
+        <param name="mission_fcu_ground_height" value="0.2"/>
         <param name="mission_bottom_clearance" value="0.0"/>
         <!--控制模式参数-->
         <param name="use_position_control" value="true"/>
@@ -29,7 +29,7 @@
 
         <!-- 喷涂参数 -->
         <param name="spray_distance" value="1.0"/>
-        <param name="layer_height" value="0.25"/>
+        <param name="layer_height" value="0.5"/>
 
         <!-- 航点遍历方向参数 -->
         <param name="traverse_clockwise" value="$(arg traverse_clockwise)"/>
