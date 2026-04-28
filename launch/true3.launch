@@ -1,0 +1,76 @@
+
+<launch>
+    <!-- 外墙 Zigzag 展示飞行 -->
+    <!-- 先启动 true.launch 连接 Pixhawk/MAVROS，再启动本 launch -->
+
+    <arg name="mavros_ns" default="/mavros"/>
+
+    <!-- 任务几何参数 -->
+    <arg name="takeoff_height" default="1.0"/>
+    <arg name="approach_distance" default="1.0"/>
+    <arg name="vertical_span" default="4.0"/>
+    <arg name="lateral_step" default="2.0"/>
+
+    <!-- 3条竖直线：上、下、上；每条竖直线后右移一次，共3次右移 -->
+    <arg name="vertical_passes" default="3"/>
+    <arg name="lateral_moves" default="3"/>
+
+    <!-- -1 = 面向墙时向右；+1 = 面向墙时向左 -->
+    <arg name="lateral_direction" default="-1"/>
+
+    <!-- 全程线段速度 -->
+    <arg name="command_speed" default="0.2"/>
+
+    <!-- 每个拐角停顿，展示视频更清楚；设为0可关闭 -->
+    <arg name="corner_hold_s" default="0.5"/>
+
+    <!-- 最后是否一直悬停 -->
+    <arg name="hold_final_forever" default="true"/>
+    <arg name="final_hold_s" default="10.0"/>
+
+    <!-- RTK：你手动确认RTK后再启动，所以默认false -->
+    <arg name="require_rtk" default="false"/>
+    <arg name="rtk_wait_timeout" default="300.0"/>
+
+    <!-- 安全/稳定性参数 -->
+    <arg name="pos_tolerance" default="0.25"/>
+    <arg name="segment_extra_wait_s" default="20.0"/>
+    <arg name="ekf_z_abs_limit" default="2.0"/>
+    <arg name="stable_frames_required" default="20"/>
+    <arg name="pos_jitter_threshold" default="0.05"/>
+    <arg name="yaw_jitter_threshold" default="0.05"/>
+    <arg name="mission0_freeze_timeout_s" default="15.0"/>
+
+    <node pkg="ship_painter"
+          type="wall_zigzag_node"
+          name="wall_zigzag_node"
+          output="screen">
+
+        <param name="mavros_ns" value="$(arg mavros_ns)"/>
+
+        <param name="takeoff_height" value="$(arg takeoff_height)"/>
+        <param name="approach_distance" value="$(arg approach_distance)"/>
+        <param name="vertical_span" value="$(arg vertical_span)"/>
+        <param name="lateral_step" value="$(arg lateral_step)"/>
+        <param name="vertical_passes" value="$(arg vertical_passes)"/>
+        <param name="lateral_moves" value="$(arg lateral_moves)"/>
+        <param name="lateral_direction" value="$(arg lateral_direction)"/>
+
+        <param name="command_speed" value="$(arg command_speed)"/>
+        <param name="corner_hold_s" value="$(arg corner_hold_s)"/>
+        <param name="hold_final_forever" value="$(arg hold_final_forever)"/>
+        <param name="final_hold_s" value="$(arg final_hold_s)"/>
+
+        <param name="require_rtk" value="$(arg require_rtk)"/>
+        <param name="rtk_wait_timeout" value="$(arg rtk_wait_timeout)"/>
+
+        <param name="pos_tolerance" value="$(arg pos_tolerance)"/>
+        <param name="segment_extra_wait_s" value="$(arg segment_extra_wait_s)"/>
+        <param name="ekf_z_abs_limit" value="$(arg ekf_z_abs_limit)"/>
+        <param name="stable_frames_required" value="$(arg stable_frames_required)"/>
+        <param name="pos_jitter_threshold" value="$(arg pos_jitter_threshold)"/>
+        <param name="yaw_jitter_threshold" value="$(arg yaw_jitter_threshold)"/>
+        <param name="mission0_freeze_timeout_s" value="$(arg mission0_freeze_timeout_s)"/>
+
+    </node>
+</launch>
