@@ -26,13 +26,20 @@
             
             <!-- 喷涂参数 -->
             <param name="spray_distance" value="2.0"/>
-            <param name="layer_height" value="0.8"/>
+            <param name="layer_height" value="2"/>
 
             <!-- 航点遍历方向参数 -->
             <param name="/ship_painter/traverse_clockwise" value="$(arg traverse_clockwise)"/>
 
             <!-- 点云可视化设置 -->
             <param name="enable_spray_visualization" value="true"/>
+
+            <!-- 航点导出（交付物A：飞手交付，纯增量，不影响飞行）
+                 export_waypoints=false 时行为与改动前完全一致 -->
+            <param name="export_waypoints" value="true" type="bool"/>
+            <param name="export_dir" value="/tmp/ship_painter_export" type="string"/>
+            <param name="pilot_spacing" value="0.5" type="double"/>
+            <param name="pilot_corner_angle_deg" value="15.0" type="double"/>
 
             <!-- 采样点云落盘 (调试/离线重建对比用)
                  save_sampled_cloud=true: 模型加载并采样后立即把 original_cloud_ 写为 PLY

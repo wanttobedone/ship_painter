@@ -43,7 +43,7 @@ Visualization Manager:
       Cell Size: 1
       Class: rviz/Grid
       Color: 160; 160; 164
-      Enabled: false
+      Enabled: true
       Line Style:
         Line Width: 0.029999999329447746
         Value: Lines
@@ -56,7 +56,7 @@ Visualization Manager:
       Plane: XY
       Plane Cell Count: 20
       Reference Frame: world
-      Value: false
+      Value: true
     - Class: rviz/MarkerArray
       Enabled: false
       Marker Topic: /visualization/pointcloud
@@ -86,8 +86,7 @@ Visualization Manager:
       Marker Topic: /visualization/bspline
       Name: BSpline
       Namespaces:
-        bspline_control_points: true
-        bspline_curves: true
+        {}
       Queue Size: 100
       Value: true
     - Class: rviz/MarkerArray
@@ -478,7 +477,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 163.7484893798828
+      Distance: 71.37126922607422
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -494,9 +493,9 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.9847962260246277
+      Pitch: 0.8997962474822998
       Target Frame: world
-      Yaw: 0.27501410245895386
+      Yaw: 2.310014247894287
     Saved: ~
 Window Geometry:
   Displays:

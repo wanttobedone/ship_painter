@@ -3,6 +3,8 @@
 #include <pcl/io/ply_io.h>
 #include <boost/filesystem.hpp>
 #include <ctime>
+#include <fstream>   // 交付物A: 航点导出落盘
+#include <iomanip>   // 交付物A: 数值格式化
 #include <geometry_msgs/PoseStamped.h>
 #include <mavros_msgs/State.h>
 #include <mavros_msgs/CommandBool.h>
@@ -134,6 +136,13 @@ private:
         // 采样点云保存（调试/离线分析/重建对比）
         bool save_sampled_cloud = false;          // 是否在采样完成后落盘
         std::string sampled_cloud_save_path = ""; // 空则自动生成 /tmp/sampled_<model>_<ts>.ply
+
+        // 航点导出（交付物A：飞手交付，纯增量，异常不影响飞行）
+        bool export_waypoints = true;                        // 规划完成后是否导出航点文件
+        std::string export_dir = "/tmp/ship_painter_export"; // 导出目录（不存在则创建）
+        double pilot_spacing = 0.5;                          // 飞手版最大点间距(m)
+        double pilot_corner_angle_deg = 15.0;                // 拐点判定角阈值(度)
+        double resample_spacing = 0.02;                      // 记录到元数据（规划步长）
     } params_;
     
     // 回调函数
@@ -183,6 +192,8 @@ private:
                                const Eigen::Vector3d& o_m,
                                const Eigen::Vector3d& t_m);
     void reorderLayersByProximity();
+    // 交付物A：把 map 系航点逆变换回 mission0 相对系并落盘（全量CSV+飞手CSV+元数据+README）
+    void exportWaypoints();
 };
 
 ShipPainterNode::ShipPainterNode() : nh_private_("~"), received_trajectory_setpoint_(false){
@@ -289,8 +300,15 @@ bool ShipPainterNode::loadParameters() {
     nh_private_.param("rtk_wait_timeout", params_.rtk_wait_timeout, 300.0);
     double resample_spacing_param;
     nh_private_.param<double>("resample_spacing", resample_spacing_param, 0.02);
+    params_.resample_spacing = resample_spacing_param;  // 供导出元数据记录
 
     nh_private_.param<std::string>("mavros_ns", params_.mavros_ns, "/mavros");
+
+    // 航点导出参数（交付物A）
+    nh_private_.param<bool>("export_waypoints", params_.export_waypoints, true);
+    nh_private_.param<std::string>("export_dir", params_.export_dir, std::string("/tmp/ship_painter_export"));
+    nh_private_.param<double>("pilot_spacing", params_.pilot_spacing, 0.5);
+    nh_private_.param<double>("pilot_corner_angle_deg", params_.pilot_corner_angle_deg, 15.0);
 
     nh_private_.param<bool>("save_sampled_cloud", params_.save_sampled_cloud, false);
     nh_private_.param<std::string>("sampled_cloud_save_path", params_.sampled_cloud_save_path, "");
@@ -417,6 +435,10 @@ bool ShipPainterNode::generateSprayPath() {
 
     // 7. 按接近度排序层
     reorderLayersByProximity();
+
+    // 7.5 交付物A：导出航点（此时 path_layers_ 已是 map 系且为实际飞行层序）
+    //     任何异常只 ROS_WARN，绝不影响下面的飞行流程
+    exportWaypoints();
 
     flight_state_.path_ready = true;
     ROS_INFO("Path generation and deployment complete");
@@ -1943,6 +1965,336 @@ void ShipPainterNode::reorderLayersByProximity() {
     }
     
     ROS_INFO("All %zu layers reordered successfully", path_layers_.size());
+}
+
+// =========================================================================
+// 交付物A：航点导出（飞手交付）
+// 在 generateSprayPath() 内、reorderLayersByProximity() 之后调用。此时
+// path_layers_ 已是 map 系且为实际飞行层序（顶层在前）。逆变换回 mission0 相对系：
+//   rel     = R_mᵀ·(p_map − o_m)                (= p_local + t_m, mission0系)
+//   z_out   = rel.z + mission_fcu_ground_height  (离地高)
+//   yaw_rel = wrapToPi(wp.yaw − yaw0)
+//   n_rel   = R_mᵀ·n_map
+// 输出 4 个文件: waypoints_full.csv / waypoints_pilot.csv / export_meta.json / README_pilot.txt
+// 任何异常只 ROS_WARN，绝不中断飞行主流程。
+// =========================================================================
+void ShipPainterNode::exportWaypoints() {
+    if (!params_.export_waypoints) {
+        ROS_INFO("[export] Waypoint export disabled (export_waypoints=false)");
+        return;
+    }
+    try {
+        if (!flight_state_.mission0.valid) {
+            ROS_WARN("[export] mission0 not frozen, skip waypoint export");
+            return;
+        }
+        if (path_layers_.empty()) {
+            ROS_WARN("[export] no path layers, skip waypoint export");
+            return;
+        }
+
+        namespace fs = boost::filesystem;
+        fs::path dir(params_.export_dir);
+        boost::system::error_code ec;
+        if (!fs::exists(dir)) {
+            fs::create_directories(dir, ec);
+            if (ec) {
+                ROS_WARN("[export] cannot create export_dir '%s': %s -- skip export",
+                         dir.string().c_str(), ec.message().c_str());
+                return;
+            }
+        }
+
+        const Eigen::Matrix3d Rt = flight_state_.mission0.R_m.transpose();
+        const Eigen::Vector3d o_m = flight_state_.mission0.origin_map;
+        const double yaw0 = flight_state_.mission0.yaw0;
+        const double h_ground = params_.mission_fcu_ground_height;
+
+        auto wrapToPi = [](double a) -> double {
+            while (a >  M_PI) a -= 2.0 * M_PI;
+            while (a < -M_PI) a += 2.0 * M_PI;
+            return a;
+        };
+
+        struct RelWp { double x, y, z, yaw_deg, nx, ny, nz; };
+        auto dist3 = [](const RelWp& a, const RelWp& b) -> double {
+            double dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+            return std::sqrt(dx * dx + dy * dy + dz * dz);
+        };
+        auto lerpRel = [](const RelWp& a, const RelWp& b, double t) -> RelWp {
+            RelWp r;
+            r.x = a.x + t * (b.x - a.x);
+            r.y = a.y + t * (b.y - a.y);
+            r.z = a.z + t * (b.z - a.z);
+            double dyaw = b.yaw_deg - a.yaw_deg;               // 最短角插值
+            while (dyaw >  180.0) dyaw -= 360.0;
+            while (dyaw < -180.0) dyaw += 360.0;
+            double yw = a.yaw_deg + t * dyaw;
+            while (yw >  180.0) yw -= 360.0;
+            while (yw < -180.0) yw += 360.0;
+            r.yaw_deg = yw;
+            double nx = a.nx + t * (b.nx - a.nx);
+            double ny = a.ny + t * (b.ny - a.ny);
+            double nz = a.nz + t * (b.nz - a.nz);
+            double nn = std::sqrt(nx * nx + ny * ny + nz * nz);
+            if (nn > 1e-9) { nx /= nn; ny /= nn; nz /= nn; }
+            r.nx = nx; r.ny = ny; r.nz = nz;
+            return r;
+        };
+
+        // 1) 逆变换全部航点（保持飞行层序与层内顺序）
+        std::vector<std::vector<RelWp>> rel_layers;
+        rel_layers.reserve(path_layers_.size());
+        size_t full_count = 0;
+        for (const auto& layer : path_layers_) {
+            std::vector<RelWp> rl;
+            rl.reserve(layer.waypoints.size());
+            for (const auto& wp : layer.waypoints) {
+                Eigen::Vector3d rel  = Rt * (wp.position - o_m);
+                Eigen::Vector3d nrel = Rt * wp.surface_normal;
+                RelWp r;
+                r.x = rel.x();
+                r.y = rel.y();
+                r.z = rel.z() + h_ground;
+                r.yaw_deg = wrapToPi(wp.yaw - yaw0) * 180.0 / M_PI;
+                r.nx = nrel.x(); r.ny = nrel.y(); r.nz = nrel.z();
+                rl.push_back(r);
+            }
+            full_count += rl.size();
+            rel_layers.push_back(std::move(rl));
+        }
+
+        // 2) 写全量CSV
+        const std::string full_path = (dir / "waypoints_full.csv").string();
+        {
+            std::ofstream ofs(full_path);
+            if (!ofs) { ROS_WARN("[export] cannot open %s", full_path.c_str()); return; }
+            ofs << "layer_index,wp_index,x,y,z,yaw_deg,nx,ny,nz\n";
+            ofs << std::fixed << std::setprecision(6);
+            for (size_t li = 0; li < rel_layers.size(); ++li) {
+                const auto& rl = rel_layers[li];
+                for (size_t wi = 0; wi < rl.size(); ++wi) {
+                    const auto& r = rl[wi];
+                    ofs << li << ',' << wi << ','
+                        << r.x << ',' << r.y << ',' << r.z << ','
+                        << r.yaw_deg << ','
+                        << r.nx << ',' << r.ny << ',' << r.nz << '\n';
+                }
+            }
+        }
+
+        // 3) 飞手降采样（每层独立，保持飞行顺序）
+        const double spacing = std::max(1e-3, params_.pilot_spacing);
+        const double corner_rad = params_.pilot_corner_angle_deg * M_PI / 180.0;
+
+        std::vector<std::vector<RelWp>> pilot_layers;
+        pilot_layers.reserve(rel_layers.size());
+        size_t pilot_count = 0;
+        for (size_t li = 0; li < rel_layers.size(); ++li) {
+            std::vector<RelWp> pilot;
+            if (rel_layers[li].empty()) { pilot_layers.push_back(pilot); continue; }
+
+            // 闭合层去掉与首点重复的末点，避免首=末重复两次(规则d)
+            std::vector<RelWp> src(rel_layers[li].begin(), rel_layers[li].end());
+            if (path_layers_[li].is_closed && src.size() >= 2 &&
+                dist3(src.front(), src.back()) < 1e-6) {
+                src.pop_back();
+            }
+            const size_t n = src.size();
+            if (n == 1) {
+                pilot.push_back(src[0]);
+                pilot_count += pilot.size();
+                pilot_layers.push_back(std::move(pilot));
+                continue;
+            }
+
+            // (a)(b) 关键点：首、末、拐点(方向变化角 > 阈值)
+            std::vector<char> keep(n, 0);
+            keep[0] = 1; keep[n - 1] = 1;
+            for (size_t i = 1; i + 1 < n; ++i) {
+                Eigen::Vector3d vin (src[i].x - src[i-1].x, src[i].y - src[i-1].y, src[i].z - src[i-1].z);
+                Eigen::Vector3d vout(src[i+1].x - src[i].x, src[i+1].y - src[i].y, src[i+1].z - src[i].z);
+                double ln = vin.norm(), lo = vout.norm();
+                if (ln < 1e-9 || lo < 1e-9) continue;
+                double cosang = std::max(-1.0, std::min(1.0, vin.dot(vout) / (ln * lo)));
+                if (std::acos(cosang) > corner_rad) keep[i] = 1;
+            }
+            std::vector<size_t> anchors;
+            for (size_t i = 0; i < n; ++i) if (keep[i]) anchors.push_back(i);
+
+            // (c) 锚点之间按弧长每 spacing 等距补点
+            pilot.push_back(src[anchors[0]]);
+            for (size_t m = 0; m + 1 < anchors.size(); ++m) {
+                const size_t ka = anchors[m], kb = anchors[m + 1];
+                double L = 0.0;
+                for (size_t j = ka; j < kb; ++j) L += dist3(src[j], src[j + 1]);
+                if (L > spacing) {
+                    size_t seg_j = ka;
+                    double seg_start = 0.0;
+                    double seg_len = dist3(src[ka], src[ka + 1]);
+                    const int nmarks = static_cast<int>(std::floor(L / spacing));
+                    for (int k = 1; k <= nmarks; ++k) {
+                        const double target = k * spacing;
+                        if (target >= L - 1e-9) break;   // 落到 kb 上，交给锚点，避免重复
+                        while (target > seg_start + seg_len + 1e-12 && seg_j + 1 < kb) {
+                            seg_start += seg_len;
+                            ++seg_j;
+                            seg_len = dist3(src[seg_j], src[seg_j + 1]);
+                        }
+                        const double t = seg_len > 1e-12 ? (target - seg_start) / seg_len : 0.0;
+                        pilot.push_back(lerpRel(src[seg_j], src[seg_j + 1], t));
+                    }
+                }
+                pilot.push_back(src[kb]);  // 锚点（每个锚点恰好写一次）
+            }
+            pilot_count += pilot.size();
+            pilot_layers.push_back(std::move(pilot));
+        }
+
+        // 4) 写飞手CSV
+        const std::string pilot_path = (dir / "waypoints_pilot.csv").string();
+        {
+            std::ofstream ofs(pilot_path);
+            if (!ofs) { ROS_WARN("[export] cannot open %s", pilot_path.c_str()); return; }
+            ofs << "layer_index,wp_index,x,y,z,yaw_deg,nx,ny,nz\n";
+            ofs << std::fixed << std::setprecision(6);
+            for (size_t li = 0; li < pilot_layers.size(); ++li) {
+                const auto& rl = pilot_layers[li];
+                for (size_t wi = 0; wi < rl.size(); ++wi) {
+                    const auto& r = rl[wi];
+                    ofs << li << ',' << wi << ','
+                        << r.x << ',' << r.y << ',' << r.z << ','
+                        << r.yaw_deg << ','
+                        << r.nx << ',' << r.ny << ',' << r.nz << '\n';
+                }
+            }
+        }
+
+        // 诊断统计：首个导出层(顶层)首点、z最小层首点、建筑估高
+        size_t low_li = 0;
+        double low_z = std::numeric_limits<double>::max();
+        double max_z = -std::numeric_limits<double>::max();
+        for (size_t li = 0; li < rel_layers.size(); ++li) {
+            if (rel_layers[li].empty()) continue;
+            const double z0 = rel_layers[li].front().z;
+            if (z0 < low_z) { low_z = z0; low_li = li; }
+            for (const auto& r : rel_layers[li]) max_z = std::max(max_z, r.z);
+        }
+
+        // 5) 元数据 JSON
+        auto jesc = [](const std::string& s) -> std::string {
+            std::string o; o.reserve(s.size() + 8);
+            for (char c : s) {
+                switch (c) {
+                    case '"':  o += "\\\""; break;
+                    case '\\': o += "\\\\"; break;
+                    case '\n': o += "\\n";  break;
+                    case '\r': o += "\\r";  break;
+                    case '\t': o += "\\t";  break;
+                    default:   o += c;      break;
+                }
+            }
+            return o;
+        };
+        std::ostringstream note;
+        note << std::fixed << std::setprecision(2)
+             << "mission0相对坐标系: 原点=起飞前飞控位置(位于离地 " << h_ground
+             << " m 处), 现实摆放规则为机头正对目标墙面中点、建筑前方 "
+             << params_.mission_forward_distance << " m; "
+             << "x轴=冻结时机头朝向(水平指向建筑), y轴=机头左侧, z轴=竖直向上; "
+             << "CSV中 x/y 为水平相对坐标(米), z 为离地高度(米, 已加 mission_fcu_ground_height), "
+             << "yaw_deg 为相对起飞时机头朝向的偏航角(度, 逆时针为正, 范围[-180,180]), "
+             << "nx/ny/nz 为 mission0 系下表面法向(单位向量)。层按飞行顺序排列(顶层在前)。";
+
+        char tbuf[32];
+        std::time_t tnow = std::time(nullptr);
+        std::strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S", std::localtime(&tnow));
+
+        const std::string meta_path = (dir / "export_meta.json").string();
+        {
+            std::ofstream ofs(meta_path);
+            if (!ofs) { ROS_WARN("[export] cannot open %s", meta_path.c_str()); return; }
+            ofs << std::fixed << std::setprecision(6);
+            ofs << "{\n";
+            ofs << "  \"generated_time\": \"" << tbuf << "\",\n";
+            ofs << "  \"model_path\": \"" << jesc(params_.model_path) << "\",\n";
+            ofs << "  \"mission_forward_distance\": "  << params_.mission_forward_distance << ",\n";
+            ofs << "  \"mission_fcu_ground_height\": " << params_.mission_fcu_ground_height << ",\n";
+            ofs << "  \"mission_bottom_clearance\": "  << params_.mission_bottom_clearance << ",\n";
+            ofs << "  \"spray_distance\": " << params_.spray_distance << ",\n";
+            ofs << "  \"layer_height\": "   << params_.layer_height << ",\n";
+            ofs << "  \"resample_spacing\": " << params_.resample_spacing << ",\n";
+            ofs << "  \"pilot_spacing\": "  << params_.pilot_spacing << ",\n";
+            ofs << "  \"pilot_corner_angle_deg\": " << params_.pilot_corner_angle_deg << ",\n";
+            ofs << "  \"traverse_clockwise\": " << (params_.traverse_clockwise ? "true" : "false") << ",\n";
+            ofs << "  \"num_layers\": " << rel_layers.size() << ",\n";
+            ofs << "  \"num_waypoints_full\": "  << full_count << ",\n";
+            ofs << "  \"num_waypoints_pilot\": " << pilot_count << ",\n";
+            ofs << "  \"building_height_est\": " << (max_z > -1e300 ? max_z : 0.0) << ",\n";
+            ofs << "  \"coordinate_system_note\": \"" << jesc(note.str()) << "\"\n";
+            ofs << "}\n";
+        }
+
+        // 6) 面向飞手的中文 README
+        const std::string readme_path = (dir / "README_pilot.txt").string();
+        {
+            std::ofstream ofs(readme_path);
+            if (!ofs) { ROS_WARN("[export] cannot open %s", readme_path.c_str()); return; }
+            ofs << std::fixed << std::setprecision(2);
+            ofs << "========================================\n";
+            ofs << " 喷涂无人机 航点相对坐标 (飞手说明)\n";
+            ofs << "========================================\n";
+            ofs << "生成时间: " << tbuf << "\n";
+            ofs << "模型文件: " << params_.model_path << "\n\n";
+            ofs << "【坐标系定义 (mission0 相对系)】\n";
+            ofs << "  原点 = 起飞前飞控所在位置 (离地 " << h_ground << " m)。\n";
+            ofs << "  摆机规则: 机头正对目标墙面中点, 建筑前方 "
+                << params_.mission_forward_distance << " m 处, 机身保持水平。\n\n";
+            ofs << "        建筑/墙面 (喷涂目标)\n";
+            ofs << "      +-------------------+\n";
+            ofs << "      |                   |\n";
+            ofs << "      |     (喷涂面)       |\n";
+            ofs << "      +-------------------+\n";
+            ofs << "                ^  x  (机头初始朝向, 指向建筑)\n";
+            ofs << "                |\n";
+            ofs << "     y <--------O   起飞点 = mission0 原点 (飞控位置)\n";
+            ofs << "  (机头左侧)      z 轴竖直向上, CSV 中 z = 离地高度\n\n";
+            ofs << "【单位】 x/y/z = 米(m), yaw_deg = 度(deg), 逆时针为正。\n\n";
+            ofs << "【CSV 列含义】 layer_index(层号,从0起,顶层在前), wp_index(层内序号),\n";
+            ofs << "  x(前向,指向建筑为正), y(左为正), z(离地高度), yaw_deg(相对机头初始朝向),\n";
+            ofs << "  nx/ny/nz(该点建筑表面法向)。\n\n";
+            ofs << "【规模】 层数 = " << rel_layers.size()
+                << ", 全量航点 = " << full_count
+                << ", 飞手版航点 = " << pilot_count << "\n";
+            ofs << "  建筑估高(最高层离地) ≈ " << (max_z > -1e300 ? max_z : 0.0) << " m\n\n";
+            ofs << "【注意事项】\n";
+            ofs << "  1. z 为“离地高度”而非海拔, 起飞点地面记为 0。\n";
+            ofs << "  2. yaw 为相对“起飞时机头朝向”的偏航, 不是绝对方位角; 真机转 QGC 时会\n";
+            ofs << "     结合现场 heading 换算成方位角。\n";
+            ofs << "  3. 层按飞行顺序排列: 顶层(layer_index=0)在前, 无人机先爬到最高层再自上而下。\n";
+            ofs << "  4. waypoints_full.csv 为全量航点(供离线渲染), waypoints_pilot.csv 为\n";
+            ofs << "     降采样版(供人工核对/生成 QGC 任务), 两者坐标系完全一致。\n";
+        }
+
+        ROS_INFO("[export] Wrote 4 files to %s", dir.string().c_str());
+        ROS_INFO("[export] Full=%zu pts, Pilot=%zu pts, Layers=%zu",
+                 full_count, pilot_count, rel_layers.size());
+        if (!rel_layers.empty() && !rel_layers[0].empty()) {
+            const auto& r = rel_layers[0].front();
+            ROS_INFO("[export] Layer[0] (top)   first pt: x=%.3f y=%.3f z=%.3f yaw=%.1f deg",
+                     r.x, r.y, r.z, r.yaw_deg);
+        }
+        if (low_z < std::numeric_limits<double>::max() && !rel_layers[low_li].empty()) {
+            const auto& r = rel_layers[low_li].front();
+            ROS_INFO("[export] Layer[%zu] (lowest) first pt: x=%.3f y=%.3f z=%.3f yaw=%.1f deg",
+                     low_li, r.x, r.y, r.z, r.yaw_deg);
+        }
+
+    } catch (const std::exception& e) {
+        ROS_WARN("[export] exception during waypoint export: %s (flight unaffected)", e.what());
+    } catch (...) {
+        ROS_WARN("[export] unknown exception during waypoint export (flight unaffected)");
+    }
 }
 
 // 生成从当前位置到第一层的B样条接近轨迹
