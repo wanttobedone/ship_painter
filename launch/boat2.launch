@@ -9,30 +9,36 @@
             <!--虚拟环境话题 暂时改了/iris_0-->
             <param name="mavros_ns" value="/mavros"/>
             <!-- 模型路径（支持STL和PLY） -->
-            <param name="model_path" value="$(find ship_painter)/models/s201.ply"/>
+            <param name="model_path" value="$(find ship_painter)/models/wall1.stl"/>
             <!-- <param name="model_path" value="$(find ship_painter)/models/test.stl"/> -->
 
             <!-- 路径规划参数 -->
-            <param name="alpha_shape_value" value="5"/>
-            <param name="target_sample_count" value="1000000"/>
+            <param name="alpha_shape_value" value="50"/>
+            <param name="target_sample_count" value="5000000"/>
             <!-- 任务部署参数 -->
-            <param name="mission_forward_distance" value="3.0"/>
-            <param name="mission_fcu_ground_height" value="0.3"/>
+            <param name="mission_forward_distance" value="5.0"/>
+            <param name="mission_fcu_ground_height" value="0.05"/>
             <param name="mission_bottom_clearance" value="0.0"/>
             <!--步长设置-->
             <param name="resample_spacing" value="0.01" type="double" />
-            <param name="flight_speed" value="0.6"/>        <!-- 巡航速度 (m/s) -->
+            <param name="flight_speed" value="2"/>        <!-- 巡航速度 0.6(m/s) -->
             <param name="transition_speed" value="0.003"/>    <!-- 层间过渡速度 (m/s) -->
             
             <!-- 喷涂参数 -->
-            <param name="spray_distance" value="0.6"/>
-            <param name="layer_height" value="0.5"/>
+            <param name="spray_distance" value="2.0"/>
+            <param name="layer_height" value="0.8"/>
 
             <!-- 航点遍历方向参数 -->
             <param name="/ship_painter/traverse_clockwise" value="$(arg traverse_clockwise)"/>
 
             <!-- 点云可视化设置 -->
             <param name="enable_spray_visualization" value="true"/>
+
+            <!-- 采样点云落盘 (调试/离线重建对比用)
+                 save_sampled_cloud=true: 模型加载并采样后立即把 original_cloud_ 写为 PLY
+                 sampled_cloud_save_path 留空: 自动写到 /tmp/sampled_<model>_<时间戳>.ply -->
+            <param name="save_sampled_cloud" value="false" type="bool"/>
+            <param name="sampled_cloud_save_path" value="/home/ncu/bags" type="string"/>
 
             <!-- Clipper -->
             <param name="use_clipper_offset" value="true"/>
@@ -42,14 +48,14 @@
             <param name="enable_normal_smoothing" value="false"/>
             
             <!-- 法向量估计参数 -->
-            <param name="voxel_resolution" value="0.03"/>    <!-- 体素大小0.03 -->
+            <param name="voxel_resolution" value="0.1"/>    <!-- 体素大小0.03 -->
             <!-- 姿态控制参数 -->
             <param name="use_position_control" value="true"/>
             
             <!-- 飞行参数 - 针对姿态控制优化 -->
-            <param name="takeoff_height" value="2.0"/>
+            <param name="takeoff_height" value="1.0"/>
             <param name="waypoint_tolerance" value="0.2"/>   <!-- 减小位置容差，暂未用到 -->
-            <param name="orientation_tolerance" value="0.15"/><!-- 姿态容差(约8.5度) -->
+            <param name="orientation_tolerance" value="0.05"/><!-- 姿态容差(约8.5度) -->
             
             <param name="frame_id" value="world"/>
         </node>
@@ -72,7 +78,7 @@
         <param name="enable_depth_correction" value="false" type="bool"/>
         
         <!-- 目标距离（米） -->
-        <param name="target_distance" value="0.6" type="double"/>
+        <param name="target_distance" value="2" type="double"/>
         
         <!-- PID参数（从保守值开始） -->
         <param name="distance_kp" value="0.9" type="double"/>

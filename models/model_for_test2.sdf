@@ -5,11 +5,11 @@
     <static>true</static>
     
     <link name="link">
-      <!-- 视觉外观 -->
+      <!-- 视觉外观: 用带 triplanar UV + brick 纹理的 OBJ, 给 RTAB-Map VO 提供特征 -->
       <visual name="visual">
         <geometry>
           <mesh>
-            <uri>model://model_for_test2.dae</uri>
+            <uri>model://model_for_test2_textured.obj</uri>
             <scale>1.0 1.0 1.0</scale>
           </mesh>
         </geometry>

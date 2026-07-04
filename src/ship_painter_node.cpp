@@ -1,5 +1,8 @@
 #include <ros/ros.h>
 #include "ship_painter/path_planner.h"
+#include <pcl/io/ply_io.h>
+#include <boost/filesystem.hpp>
+#include <ctime>
 #include <geometry_msgs/PoseStamped.h>
 #include <mavros_msgs/State.h>
 #include <mavros_msgs/CommandBool.h>
@@ -127,6 +130,10 @@ private:
         bool traverse_clockwise = true;  // 遍历方向：true=顺时针，false=逆时针
         bool require_rtk = false;         // 是否要求RTK Fix后才起飞
         double rtk_wait_timeout = 300.0;  // RTK等待超时(秒)
+
+        // 采样点云保存（调试/离线分析/重建对比）
+        bool save_sampled_cloud = false;          // 是否在采样完成后落盘
+        std::string sampled_cloud_save_path = ""; // 空则自动生成 /tmp/sampled_<model>_<ts>.ply
     } params_;
     
     // 回调函数
@@ -284,7 +291,10 @@ bool ShipPainterNode::loadParameters() {
     nh_private_.param<double>("resample_spacing", resample_spacing_param, 0.02);
 
     nh_private_.param<std::string>("mavros_ns", params_.mavros_ns, "/mavros");
-    
+
+    nh_private_.param<bool>("save_sampled_cloud", params_.save_sampled_cloud, false);
+    nh_private_.param<std::string>("sampled_cloud_save_path", params_.sampled_cloud_save_path, "");
+
     if (params_.model_path.empty()) {
         ROS_ERROR("Model path is empty!");
         return false;
@@ -336,6 +346,45 @@ bool ShipPainterNode::generateSprayPath() {
     if (!load_success) {
         ROS_ERROR("Failed to load model: %s", params_.model_path.c_str());
         return false;
+    }
+
+    // 1.5 可选: 把采样后的原始点云保存到磁盘 (供离线调试 / 重建对比)
+    if (params_.save_sampled_cloud) {
+        auto cloud = planner_.getOriginalCloud();
+        if (!cloud || cloud->empty()) {
+            ROS_WARN("save_sampled_cloud=true 但 original_cloud 为空, 跳过保存");
+        } else {
+            namespace fs = boost::filesystem;
+            // 准备时间戳和模型 basename, 用于自动文件名
+            auto t = std::time(nullptr);
+            char ts[32];
+            std::strftime(ts, sizeof(ts), "%Y%m%d_%H%M%S", std::localtime(&t));
+            std::string basename = fs::path(params_.model_path).stem().string();
+
+            fs::path save_path(params_.sampled_cloud_save_path);
+            // 空字符串: 默认 /tmp
+            if (save_path.empty()) save_path = "/tmp";
+            // 既不是已存在目录, 也不以 .ply 结尾 -> 当成 "目录" 看待 (允许用户写不存在的目录)
+            bool treat_as_dir = fs::is_directory(save_path) ||
+                                save_path.extension().string() != ".ply";
+            if (treat_as_dir) {
+                fs::create_directories(save_path);
+                save_path /= ("sampled_" + basename + "_" + ts + ".ply");
+            } else {
+                // 用户给的是文件名, 确保父目录存在
+                if (save_path.has_parent_path()) {
+                    fs::create_directories(save_path.parent_path());
+                }
+            }
+
+            if (pcl::io::savePLYFileBinary(save_path.string(), *cloud) == 0) {
+                ROS_INFO("Saved sampled cloud (%zu pts) -> %s",
+                         cloud->size(), save_path.string().c_str());
+            } else {
+                ROS_ERROR("Failed to save sampled cloud to %s",
+                          save_path.string().c_str());
+            }
+        }
     }
 
     // 2. 纯局部系规划（不做任何部署变换）
@@ -702,9 +751,9 @@ void ShipPainterNode::publishPointCloudVisualization() {
     processed_marker.action = visualization_msgs::Marker::ADD;
     
     // 设置点的大小
-    processed_marker.scale.x = 0.015;  // 1.5cm直径的小球
-    processed_marker.scale.y = 0.015;
-    processed_marker.scale.z = 0.015;
+    processed_marker.scale.x = 0.1;  // 1.5cm直径的小球
+    processed_marker.scale.y = 0.1;
+    processed_marker.scale.z = 0.1;
     
     // 设置颜色为白色
     processed_marker.color.r = 1.0;
@@ -750,7 +799,7 @@ void ShipPainterNode::publishPointCloudVisualization() {
         original_marker.color.a = 0.8;   // 透明度
         
         // 添加点，但只取部分点以减少计算负担
-        size_t step = std::max(1UL, original_cloud->size() / 20000);  // 最多显示10000个点
+        size_t step = std::max(1UL, original_cloud->size() / 10000);  // 最多显示10000个点
         for (size_t i = 0; i < original_cloud->size(); i += step) {
             const auto& point = original_cloud->points[i];
             if (!pcl::isFinite(point)) {

@@ -20,23 +20,30 @@
 #include <tf2/LinearMath/Matrix3x3.h>
 
 // ============================================================================
-// 外墙 Zigzag 展示飞行节点
+// 外墙 Horizontal Zigzag 展示飞行节点
 //
 // 任务目的：
 //   用于真实外墙前的展示视频录制，不执行喷涂路径规划。
-//   只验证并展示：mission0 冻结、相对 mission0 起飞、面向墙面保持 yaw、
-//   在墙面前执行上下 zigzag / 割草机路径。
+//   与 wall_zigzag_node 保持同一套 mission0 工作流：
+//     - 等 MAVROS
+//     - 等 local pose
+//     - 可选等 RTK
+//     - 冻结 mission0：当前位置 + 当前 yaw
+//     - mission0.x 为冻结时机头方向
+//     - mission0.y 为左侧方向
+//     - mission0.z 为世界竖直向上
+//     - 全程 yaw 固定为 mission0.yaw0，使无人机始终正对墙面
 //
 // 默认轨迹：
 //   1. 冻结 mission0：当前位置 + 当前 yaw
 //   2. 起飞到 mission0.z + 1m
 //   3. 沿机头方向前飞 1m
-//   4. 上飞 5m
-//   5. 向右 2m
-//   6. 下飞 5m
-//   7. 向右 2m
-//   8. 上飞 5m
-//   9. 向右 2m
+//   4. 向上飞 6m
+//   5. 向右飞 3m
+//   6. 向下飞 2m
+//   7. 向左飞 3m
+//   8. 向下飞 2m
+//   9. 向右飞 3m
 //  10. 悬停
 //
 // 坐标约定：
@@ -44,6 +51,7 @@
 //   mission0.z：世界竖直向上
 //   mission0.y：左侧方向
 //   因此“无人机/人面向墙时的右边”是 mission0.y 的负方向。
+//   lateral_direction = -1 表示先向右；+1 表示先向左。
 //
 // 轨迹平滑：
 //   每个线段使用五次时间缩放：
@@ -210,7 +218,7 @@ bool waitForConnection(ros::Rate& rate, double timeout_s) {
 }
 
 // ============================================================================
-// 不再使用 fabs(z) < 某阈值作为 EKF ready 判据。
+// 不使用 fabs(z) < 某阈值作为 EKF ready 判据。
 // 原因：map 原点不一定等于当前起飞点，z 可能不是 0。
 // 这里仅检查是否收到有效 local pose；真正稳定性由 mission0 freeze 阶段判断。
 // ============================================================================
@@ -641,15 +649,15 @@ bool flyQuinticSegment(
     return false;
 }
 
-std::vector<geometry_msgs::Point> buildZigzagWaypoints(
+std::vector<geometry_msgs::Point> buildHorizontalZigzagWaypoints(
     const MissionFrame& mission0,
     double takeoff_height,
     double approach_distance,
-    double vertical_span,
-    double lateral_step,
-    int vertical_passes,
-    int lateral_moves,
-    int lateral_direction)
+    double initial_climb,
+    double horizontal_span,
+    double vertical_step_down,
+    int horizontal_segments,
+    int first_lateral_direction)
 {
     std::vector<geometry_msgs::Point> waypoints;
 
@@ -667,38 +675,44 @@ std::vector<geometry_msgs::Point> buildZigzagWaypoints(
         missionLocalToMap(mission0, x, y, z)
     );
 
-    // Zigzag 扫描
-    // pass 0: up
-    // pass 1: down
-    // pass 2: up
-    // ...
-    for (int pass = 0; pass < vertical_passes; ++pass) {
-        const bool go_up = (pass % 2 == 0);
+    // 先向上飞 initial_climb
+    z = takeoff_height + initial_climb;
+    waypoints.push_back(
+        missionLocalToMap(mission0, x, y, z)
+    );
 
-        if (go_up) {
-            z = takeoff_height + vertical_span;
-        } else {
-            z = takeoff_height;
-        }
+    // 水平 Zigzag：
+    // 第 1 段：向右/左 horizontal_span
+    // 然后下降 vertical_step_down
+    // 第 2 段：反向 horizontal_span
+    // 然后下降 vertical_step_down
+    // 依次循环。
+    int lateral_direction = first_lateral_direction;
+
+    for (int seg = 0; seg < horizontal_segments; ++seg) {
+        y += static_cast<double>(lateral_direction) * horizontal_span;
 
         waypoints.push_back(
             missionLocalToMap(mission0, x, y, z)
         );
 
-        if (pass < lateral_moves) {
-            y += static_cast<double>(lateral_direction) * lateral_step;
+        // 最后一条水平段之后不再强制下降。
+        if (seg < horizontal_segments - 1) {
+            z -= vertical_step_down;
 
             waypoints.push_back(
                 missionLocalToMap(mission0, x, y, z)
             );
         }
+
+        lateral_direction *= -1;
     }
 
     return waypoints;
 }
 
 int main(int argc, char** argv) {
-    ros::init(argc, argv, "wall_zigzag_node");
+    ros::init(argc, argv, "wall_horizontal_node");
 
     ros::NodeHandle nh;
     ros::NodeHandle nh_private("~");
@@ -709,11 +723,11 @@ int main(int argc, char** argv) {
 
     double takeoff_height;
     double approach_distance;
-    double vertical_span;
-    double lateral_step;
-    int vertical_passes;
-    int lateral_moves;
-    int lateral_direction;
+    double initial_climb;
+    double horizontal_span;
+    double vertical_step_down;
+    int horizontal_segments;
+    int first_lateral_direction;
 
     double command_speed;
     double corner_hold_s;
@@ -738,13 +752,21 @@ int main(int argc, char** argv) {
 
     nh_private.param<double>("takeoff_height", takeoff_height, 1.0);
     nh_private.param<double>("approach_distance", approach_distance, 1.0);
-    nh_private.param<double>("vertical_span", vertical_span, 5.0);
-    nh_private.param<double>("lateral_step", lateral_step, 2.0);
-    nh_private.param<int>("vertical_passes", vertical_passes, 3);
-    nh_private.param<int>("lateral_moves", lateral_moves, 3);
 
-    // -1 表示无人机/人面向墙时的右边；+1 表示左边
-    nh_private.param<int>("lateral_direction", lateral_direction, -1);
+    // 起飞并前飞后，先向上飞的高度，默认 6m
+    nh_private.param<double>("initial_climb", initial_climb, 6.0);
+
+    // 每条水平扫描线长度，默认 3m
+    nh_private.param<double>("horizontal_span", horizontal_span, 3.0);
+
+    // 每两条水平扫描线之间向下移动的高度，默认 2m
+    nh_private.param<double>("vertical_step_down", vertical_step_down, 2.0);
+
+    // 水平段数量。默认 3 段：右 3m、左 3m、右 3m
+    nh_private.param<int>("horizontal_segments", horizontal_segments, 3);
+
+    // -1 表示无人机/人面向墙时先向右；+1 表示先向左
+    nh_private.param<int>("first_lateral_direction", first_lateral_direction, -1);
 
     // 解释为最大速度上限。五次时间缩放会自动拉长每段时间以保证不超过该速度。
     nh_private.param<double>("command_speed", command_speed, 0.2);
@@ -764,30 +786,31 @@ int main(int argc, char** argv) {
     nh_private.param<double>("yaw_jitter_threshold", yaw_jitter_threshold, 0.05);
     nh_private.param<double>("mission0_freeze_timeout_s", mission0_freeze_timeout_s, 15.0);
 
-    if (vertical_passes <= 0) {
-        ROS_ERROR("vertical_passes must be > 0");
+    if (horizontal_segments <= 0) {
+        ROS_ERROR("horizontal_segments must be > 0");
         return 1;
     }
 
-    if (lateral_moves < 0) {
-        ROS_ERROR("lateral_moves must be >= 0");
+    if (first_lateral_direction != -1 && first_lateral_direction != 1) {
+        ROS_WARN("first_lateral_direction should be -1 or 1. Current=%d, forcing to -1",
+                 first_lateral_direction);
+        first_lateral_direction = -1;
+    }
+
+    if (initial_climb < 0.0 || horizontal_span < 0.0 || vertical_step_down < 0.0) {
+        ROS_ERROR("initial_climb, horizontal_span, and vertical_step_down must be non-negative");
         return 1;
     }
 
-    if (lateral_direction != -1 && lateral_direction != 1) {
-        ROS_WARN("lateral_direction should be -1 or 1. Current=%d, forcing to -1", lateral_direction);
-        lateral_direction = -1;
-    }
-
-    ROS_INFO("=== Wall Zigzag Demo Configuration ===");
+    ROS_INFO("=== Wall Horizontal Zigzag Demo Configuration ===");
     ROS_INFO("mavros_ns: %s", mavros_ns.c_str());
     ROS_INFO("takeoff_height: %.2f m relative to mission0", takeoff_height);
     ROS_INFO("approach_distance: %.2f m forward", approach_distance);
-    ROS_INFO("vertical_span: %.2f m", vertical_span);
-    ROS_INFO("lateral_step: %.2f m", lateral_step);
-    ROS_INFO("vertical_passes: %d", vertical_passes);
-    ROS_INFO("lateral_moves: %d", lateral_moves);
-    ROS_INFO("lateral_direction: %d (-1=right, +1=left)", lateral_direction);
+    ROS_INFO("initial_climb: %.2f m", initial_climb);
+    ROS_INFO("horizontal_span: %.2f m", horizontal_span);
+    ROS_INFO("vertical_step_down: %.2f m", vertical_step_down);
+    ROS_INFO("horizontal_segments: %d", horizontal_segments);
+    ROS_INFO("first_lateral_direction: %d (-1=right, +1=left)", first_lateral_direction);
     ROS_INFO("command_speed: %.2f m/s as MAX speed limit", command_speed);
     ROS_INFO("corner_hold_s: %.2f s", corner_hold_s);
     ROS_INFO("require_rtk: %s", require_rtk ? "true" : "false");
@@ -849,15 +872,15 @@ int main(int argc, char** argv) {
     }
 
     // 5. build waypoint list in map frame
-    std::vector<geometry_msgs::Point> waypoints = buildZigzagWaypoints(
+    std::vector<geometry_msgs::Point> waypoints = buildHorizontalZigzagWaypoints(
         mission0,
         takeoff_height,
         approach_distance,
-        vertical_span,
-        lateral_step,
-        vertical_passes,
-        lateral_moves,
-        lateral_direction
+        initial_climb,
+        horizontal_span,
+        vertical_step_down,
+        horizontal_segments,
+        first_lateral_direction
     );
 
     if (waypoints.empty()) {
@@ -939,7 +962,7 @@ int main(int argc, char** argv) {
 
     const geometry_msgs::Point final_wp = waypoints.back();
 
-    ROS_INFO("=== Wall zigzag demo complete. Final hold. ===");
+    ROS_INFO("=== Wall horizontal zigzag demo complete. Final hold. ===");
 
     if (hold_final_forever) {
         while (ros::ok()) {

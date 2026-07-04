@@ -1,6 +1,5 @@
-
 <launch>
-    <!-- 外墙 Zigzag 展示飞行 -->
+    <!-- 外墙 Horizontal Zigzag 展示飞行 -->
     <!-- 先启动 true.launch 连接 Pixhawk/MAVROS，再启动本 launch -->
 
     <arg name="mavros_ns" default="/mavros"/>
@@ -8,17 +7,17 @@
     <!-- 任务几何参数 -->
     <arg name="takeoff_height" default="1.0"/>
     <arg name="approach_distance" default="1.0"/>
-    <arg name="vertical_span" default="5.0"/>
-    <arg name="lateral_step" default="2.0"/>
+    <arg name="initial_climb" default="6.0"/>
+    <arg name="horizontal_span" default="3.0"/>
+    <arg name="vertical_step_down" default="2.0"/>
 
-    <!-- 3条竖直线：上、下、上；每条竖直线后右移一次，共3次右移 -->
-    <arg name="vertical_passes" default="4"/>
-    <arg name="lateral_moves" default="3"/>
+    <!-- 默认 3 条水平段：右 3m、下 2m、左 3m、下 2m、右 3m -->
+    <arg name="horizontal_segments" default="3"/>
 
-    <!-- -1 = 面向墙时向右；+1 = 面向墙时向左 -->
-    <arg name="lateral_direction" default="-1"/>
+    <!-- -1 = 面向墙时先向右；+1 = 面向墙时先向左 -->
+    <arg name="first_lateral_direction" default="-1"/>
 
-    <!-- 全程线段速度 -->
+    <!-- 每段最大速度上限。五次时间缩放会让平均速度小于该值。 -->
     <arg name="command_speed" default="0.5"/>
 
     <!-- 每个拐角停顿，展示视频更清楚；设为0可关闭 -->
@@ -41,19 +40,19 @@
     <arg name="mission0_freeze_timeout_s" default="15.0"/>
 
     <node pkg="ship_painter"
-          type="wall_zigzag_node"
-          name="wall_zigzag_node"
+          type="wall_horizontal_node"
+          name="wall_horizontal_node"
           output="screen">
 
         <param name="mavros_ns" value="$(arg mavros_ns)"/>
 
         <param name="takeoff_height" value="$(arg takeoff_height)"/>
         <param name="approach_distance" value="$(arg approach_distance)"/>
-        <param name="vertical_span" value="$(arg vertical_span)"/>
-        <param name="lateral_step" value="$(arg lateral_step)"/>
-        <param name="vertical_passes" value="$(arg vertical_passes)"/>
-        <param name="lateral_moves" value="$(arg lateral_moves)"/>
-        <param name="lateral_direction" value="$(arg lateral_direction)"/>
+        <param name="initial_climb" value="$(arg initial_climb)"/>
+        <param name="horizontal_span" value="$(arg horizontal_span)"/>
+        <param name="vertical_step_down" value="$(arg vertical_step_down)"/>
+        <param name="horizontal_segments" value="$(arg horizontal_segments)"/>
+        <param name="first_lateral_direction" value="$(arg first_lateral_direction)"/>
 
         <param name="command_speed" value="$(arg command_speed)"/>
         <param name="corner_hold_s" value="$(arg corner_hold_s)"/>

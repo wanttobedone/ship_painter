@@ -27,3 +27,5 @@ scripts/
 claude.md
 
 tmp/
+models/wall1.stl
+models/sampled_tall_202605_183808.ply

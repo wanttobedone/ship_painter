@@ -13,7 +13,7 @@ Panels:
         - /VINS System1
         - /VINS System1/Feature Tracker Image1
         - /障碍物建图1
-      Splitter Ratio: 0.548872172832489
+      Splitter Ratio: 0.5476635694503784
     Tree Height: 749
   - Class: rviz/Selection
     Name: Selection
@@ -43,7 +43,7 @@ Visualization Manager:
       Cell Size: 1
       Class: rviz/Grid
       Color: 160; 160; 164
-      Enabled: true
+      Enabled: false
       Line Style:
         Line Width: 0.029999999329447746
         Value: Lines
@@ -56,25 +56,23 @@ Visualization Manager:
       Plane: XY
       Plane Cell Count: 20
       Reference Frame: world
-      Value: true
+      Value: false
     - Class: rviz/MarkerArray
-      Enabled: true
+      Enabled: false
       Marker Topic: /visualization/pointcloud
       Name: Point Cloud Visualization
       Namespaces:
-        original_pointcloud: true
-        pointcloud_center: true
-        processed_pointcloud: true
+        {}
       Queue Size: 100
-      Value: true
+      Value: false
     - Class: rviz/Marker
-      Enabled: true
+      Enabled: false
       Marker Topic: /visualization/actual_trajectory
       Name: Actual Trajectory
       Namespaces:
-        actual_trajectory: true
+        {}
       Queue Size: 100
-      Value: true
+      Value: false
     - Class: rviz/MarkerArray
       Enabled: false
       Marker Topic: /visualization/pointcloud
@@ -129,7 +127,7 @@ Visualization Manager:
       Axes Radius: 0.10000000149011612
       Class: rviz/Pose
       Color: 255; 25; 0
-      Enabled: true
+      Enabled: false
       Head Length: 0.30000001192092896
       Head Radius: 0.10000000149011612
       Name: Drone Pose
@@ -139,7 +137,7 @@ Visualization Manager:
       Shape: Arrow
       Topic: /mavros/local_position/pose
       Unreliable: false
-      Value: true
+      Value: false
     - Alpha: 1
       Buffer Length: 1
       Class: rviz/Path
@@ -190,13 +188,13 @@ Visualization Manager:
       Queue Size: 100
       Value: false
     - Class: rviz/Marker
-      Enabled: true
+      Enabled: false
       Marker Topic: /visualization/current_trajectory
       Name: BSpline_runned
       Namespaces:
-        executed_trajectory: true
+        {}
       Queue Size: 100
-      Value: true
+      Value: false
     - Class: rviz/Group
       Displays:
         - Class: rviz/Marker
@@ -255,7 +253,7 @@ Visualization Manager:
             {}
           Queue Size: 100
           Value: true
-      Enabled: true
+      Enabled: false
       Name: MPC Controller
     - Class: rviz/Group
       Displays:
@@ -374,7 +372,7 @@ Visualization Manager:
           Transport Hint: compressed
           Unreliable: false
           Value: false
-      Enabled: true
+      Enabled: false
       Name: VINS System
     - Class: rviz/Group
       Displays:
@@ -450,7 +448,7 @@ Visualization Manager:
           Use Fixed Frame: true
           Use rainbow: false
           Value: true
-      Enabled: true
+      Enabled: false
       Name: 障碍物建图
   Enabled: true
   Global Options:
@@ -480,7 +478,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 11.789619445800781
+      Distance: 163.7484893798828
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -488,17 +486,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 3.8322083950042725
-        Y: 0.6184135675430298
-        Z: 1.6779170036315918
+        X: 3.226774215698242
+        Y: 0.817764163017273
+        Z: 5.032281398773193
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.9547966122627258
+      Pitch: 0.9847962260246277
       Target Frame: world
-      Yaw: 5.823200225830078
+      Yaw: 0.27501410245895386
     Saved: ~
 Window Geometry:
   Displays:

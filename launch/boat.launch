@@ -11,21 +11,21 @@
     <!-- 仿真环境参数 -->
     <arg name="est" default="ekf2"/>
     <arg name="vehicle" default="iris"/>
-    <arg name="world" default="$(find ship_painter)/worlds/ship.world"/>
+    <arg name="world" default="$(find ship_painter)/worlds/light.world"/>
     <!-- iris_vins_fusion.sdf: 包含立体相机、IMU、GPS、风插件、机体力插件 -->
     <!-- 如果不需要扰动插件且不用VINS，可换回原版: $(find mavlink_sitl_gazebo)/models/iris_stereo_camera/iris_stereo_camera.sdf -->
     <arg name="sdf" default="$(find ship_painter)/models/iris_vins_fusion.sdf"/>
 
     <!-- 船体模型参数（可配置） -->
-    <arg name="model_name" default="S5_4" doc="S5_4 reconstructed mesh"/>
+    <arg name="model_name" default="S5_4" doc="tall.sdf"/>
     <!-- <arg name="model_name" default="test" doc="model_for_demo"/> -->
-    <arg name="model_stl" default="$(find ship_painter)/models/S5_4.stl"/>
+    <arg name="model_stl" default="$(find ship_painter)/models/tall.stl"/>
     <!-- PLY点云工作流：直接用点云文件，不需要STL/SDF -->
     <!-- <arg name="model_path" default="$(find ship_painter)/models/s101.ply"/> -->
 
     <!-- 任务部署参数（统一坐标方案） --><!--路径规划参数在boat2.launch里改-->
-    <arg name="mission_forward_distance" default="3.0" doc="目标物近侧到mission0原点的前向距离(m)"/>
-    <arg name="mission_fcu_ground_height" default="0.3" doc="起飞前飞控到地面的高度(m)"/>
+    <arg name="mission_forward_distance" default="5.0" doc="目标物近侧到mission0原点的前向距离(m)"/>
+    <arg name="mission_fcu_ground_height" default="0" doc="起飞前飞控到地面的高度(m)"/>
     <arg name="mission_bottom_clearance" default="0.0" doc="底部离地安全间隙(m)"/>
     <arg name="spray_dist" default="1.0"/>
 
@@ -41,7 +41,7 @@
     <!-- 如需在Gazebo中显示模型，需提供STL/SDF文件，取消注释并设置model_stl/model_sdf参数 -->
     
     <!-- <arg name="model_stl" default="$(find ship_painter)/models/test.stl"/> -->
-    <arg name="model_sdf" default="$(find ship_painter)/models/s101.sdf"/>
+    <arg name="model_sdf" default="$(find ship_painter)/models/tall.sdf"/>
     <node name="auto_spawner" pkg="ship_painter" type="auto_spawn_model.py" output="screen">
         <param name="stl_path" value="$(arg model_stl)"/>
         <param name="sdf_path" value="$(arg model_sdf)"/>
@@ -52,15 +52,27 @@
     </node>
    
 
+    <!-- ===================================================================
+         模拟 Intel RealSense D455F 的 frame 拓扑
+         openni_kinect 插件把 camera_info.header.frame_id 设为 camera_color_optical_frame,
+         这里补齐: base_link → camera_link (机械安装位姿, 与 SDF 中 link <pose> 一致)
+                    camera_link → camera_color_optical_frame (ROS 光轴系标准旋转)
+         这样录出的 bag /tf_static 与真机 realsense2_camera 驱动结构一致,
+         离线 RTAB-Map launch (frame_id: camera_link) 可以无改动复用 -->
+    <node pkg="tf2_ros" type="static_transform_publisher" name="base_to_camera_link"
+          args="0.1 0 0  0 0 0  base_link camera_link"/>
+    <node pkg="tf2_ros" type="static_transform_publisher" name="camera_link_to_color_optical"
+          args="0 0 0  -1.5707963 0 -1.5707963  camera_link camera_color_optical_frame"/>
+
     <!-- PX4 EKF2 Vision Parameters Configuration -->
     <!--
     This script configures PX4's EKF2 to fuse vision data from VINS-Fusion
     Enables position, velocity, and yaw fusion for vision-aided navigation
     Uses Python script with MAVROS services for more reliable parameter setting
     -->
-    <node name="set_px4_vision_params" pkg="ship_painter" type="set_px4_vision_params.py"
+    <!-- <node name="set_px4_vision_params" pkg="ship_painter" type="set_px4_vision_params.py"
           launch-prefix="bash -c 'sleep 10; $0 $@' "
-          output="screen"/>
+          output="screen"/> -->
     <!--
     视觉融合验证:
       rostopic echo /mavros/vision_pose/pose             # 检查VINS数据是否到达MAVROS

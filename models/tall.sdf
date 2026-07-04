@@ -1,0 +1,45 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <model name="tall">
+    <pose>0 0 0 0 0 0</pose>
+    <static>true</static>
+
+    <link name="link">
+      <!-- 视觉外观: 带 triplanar UV + brick 纹理的 OBJ
+           bbox ~ 23.7 x 28.2 x 36.7 m, 用作"高建筑"扫描目标 -->
+      <visual name="visual">
+        <geometry>
+          <mesh>
+            <uri>model://tall.stl</uri>
+            <scale>1.0 1.0 1.0</scale>
+          </mesh>
+        </geometry>
+      </visual>
+
+      <!-- 碰撞几何: 简化为 5 x 3 x 30 m 立方体
+           pose 放在原 mesh bbox 中心 (59.85, -11.525, 14.57), 让碰撞体覆盖模型主体 -->
+      <collision name="collision">
+        <pose>59.85 -11.525 14.57 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>5 3 30</size>
+          </box>
+        </geometry>
+      </collision>
+
+      <!-- static=true 时质量/惯量不参与物理, 但 SDF 规范要求字段存在 -->
+      <inertial>
+        <mass>1.0</mass>
+        <pose>0 0 0 0 0 0</pose>
+        <inertia>
+          <ixx>1.0</ixx>
+          <ixy>0.0</ixy>
+          <ixz>0.0</ixz>
+          <iyy>1.0</iyy>
+          <iyz>0.0</iyz>
+          <izz>1.0</izz>
+        </inertia>
+      </inertial>
+    </link>
+  </model>
+</sdf>

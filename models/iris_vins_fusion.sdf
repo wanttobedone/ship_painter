@@ -84,6 +84,78 @@
       <pose>0.1 0 0 0 0 0</pose>
     </joint>
 
+    <!-- 
+         Simulated Intel RealSense D455F RGB-D camera
+         用途: 在仿真中模拟真机 D455F 数据采集流程, 录 rosbag 供离线 RTAB-Map
+         注意此相机与上方 stereo_camera 物理共存, 都挂在机体, 但用途不同
+               - stereo_camera_link: 给 VINS-Fusion 双目 VIO 用
+               - realsense_rgbd_link: 给离线三维重建录 RGB-D bag 用
+         话题命名严格对齐真机 D455F realsense2_camera 驱动 -->
+    <link name="realsense_rgbd_link">
+      <pose>0.1 0 0 0 0 0</pose>
+      <inertial>
+        <mass>0.01</mass>
+        <inertia>
+          <ixx>4.15e-6</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>2.407e-6</iyy>
+          <iyz>0</iyz>
+          <izz>2.407e-6</izz>
+        </inertia>
+      </inertial>
+
+      <sensor name="realsense_rgbd" type="depth">
+        <update_rate>15.0</update_rate>
+        <camera>
+          <!-- D455 horizontal FOV ≈ 86° (1.5009831567 rad) -->
+          <horizontal_fov>1.5009831567</horizontal_fov>
+          <image>
+            <width>640</width>
+            <height>480</height>
+            <format>R8G8B8</format>
+          </image>
+          <clip>
+            <near>0.05</near>
+            <far>20.0</far>
+          </clip>
+        </camera>
+        <plugin name="realsense_rgbd_controller" filename="libgazebo_ros_openni_kinect.so">
+          <alwaysOn>true</alwaysOn>
+          <updateRate>15.0</updateRate>
+          <!-- cameraName 是所有 topic 的前缀, 设为 "camera" 后, 实际话题:
+               /camera/color/image_raw
+               /camera/color/camera_info
+               /camera/aligned_depth_to_color/image_raw
+               /camera/aligned_depth_to_color/camera_info
+               /camera/depth/color/points -->
+          <cameraName>camera</cameraName>
+          <imageTopicName>color/image_raw</imageTopicName>
+          <cameraInfoTopicName>color/camera_info</cameraInfoTopicName>
+          <depthImageTopicName>aligned_depth_to_color/image_raw</depthImageTopicName>
+          <depthImageCameraInfoTopicName>aligned_depth_to_color/camera_info</depthImageCameraInfoTopicName>
+          <pointCloudTopicName>depth/color/points</pointCloudTopicName>
+          <!-- frameName 同时作为 camera_info.header.frame_id 与深度反投影光轴系,
+               必须是 "光学约定" 帧 (z 沿光轴朝前), 由 boat.launch 中静态 TF 链接 -->
+          <frameName>camera_color_optical_frame</frameName>
+          <!-- 仿真 D455 近距盲区, 与真机一致 -->
+          <pointCloudCutoff>0.2</pointCloudCutoff>
+          <pointCloudCutoffMax>10.0</pointCloudCutoffMax>
+          <distortion_k1>0.0</distortion_k1>
+          <distortion_k2>0.0</distortion_k2>
+          <distortion_k3>0.0</distortion_k3>
+          <distortion_t1>0.0</distortion_t1>
+          <distortion_t2>0.0</distortion_t2>
+        </plugin>
+      </sensor>
+    </link>
+
+    <joint name="realsense_rgbd_joint" type="fixed">
+      <child>realsense_rgbd_link</child>
+      <parent>iris::base_link</parent>
+      <pose>0.1 0 0 0 0 0</pose>
+    </joint>
+
     <!-- IMU Plugin with Noise (for VINS-Fusion) -->
     <plugin name="imu_plugin" filename="libgazebo_ros_imu.so">
       <alwaysOn>true</alwaysOn>
