@@ -31,10 +31,10 @@ three.js: 优先读取本目录 vendor/three.min.js 与 vendor/OrbitControls.js(
 STL 抽稀流水线
 --------------
   1) open3d 读入, 打印原始顶点/面数与峰值内存;
-  2) 体素聚类 simplify_vertex_clustering (快且省内存, 体素取 min_axis/400, 边界保真, AABB 偏差<<1%);
-  3) 二次二次误差简化 simplify_quadric_decimation(target-faces);
-  4) 清理退化/重复三角形;
-  5) 校验: 抽稀前后 AABB 各轴尺寸偏差 < 1%, 面数落在 [0.5,1.3]*target; 不满足则用更细体素重试;
+  2) 体素聚类 simplify_vertex_clustering (快且省内存, 体素取 min_axis/500, 边界保真);
+  3) 二次误差简化 simplify_quadric_decimation(target-faces);
+  4) 清理退化/重复三角形; 顶点 np.clip 夹回原始 AABB (消除 quadric 向外微推, 保证顶层线贴楼顶);
+  5) 校验: 抽稀前后 AABB 各轴尺寸偏差 < 0.5%, 面数落在 [0.5,1.3]*target; 仍超差才用更细体素重试;
   6) 抽稀结果另存 <out同目录>/decimated_preview.stl 供人工肉眼检查(仅作视觉参照, 不参与规划)。
 
 STL 到相对坐标系的摆放 (与 ship_painter 工程一致, bbox 用抽稀【前】原始网格)
@@ -137,29 +137,41 @@ def decimate_mesh(stl_path, target_faces):
               % (len(mq.triangles), time.time() - t2, peak_mb()))
         return mq
 
-    voxel = max(min_axis / 400.0, 0.05)
-    mq = run(voxel)
-    # 校验 AABB, 不合格则用更细体素重试(更细=边界更保真)
+    # AABB 偏差容差(%): 收紧到 0.5%。60m 高楼上 0.5% 也才 0.3m, 保证"顶层红线贴楼顶"清晰。
+    # quadric 会把个别极值顶点向外微推(该网格仅作视觉参照), 直接把落在原 AABB 之外的顶点
+    # np.clip 夹回包围盒即可消除向外膨胀 —— 一次性、确定性、比"更细体素重试"快得多且省内存。
+    AABB_TOL = 0.5
+
+    def clamp_to_bbox(m):
+        v = np.asarray(m.vertices)
+        np.clip(v, bbox_min, bbox_max, out=v)
+        m.vertices = o3d.utility.Vector3dVector(v)
+        m.remove_degenerate_triangles()
+        return m
+
+    voxel = max(min_axis / 500.0, 0.04)
+    mq = clamp_to_bbox(run(voxel))
+    # clip 后一般即达标; 极端情况(向内收缩仍超差)再用更细体素重试
     for _ in range(2):
         extq = np.asarray(mq.get_axis_aligned_bounding_box().get_extent())
         dev = np.abs(extq - ext0) / np.maximum(ext0, 1e-9) * 100.0
-        if np.all(dev < 1.0):
+        if np.all(dev < AABB_TOL):
             break
-        print("[decimate]   AABB dev%%=%s >=1%%, 更细体素重试" % np.round(dev, 3))
+        print("[decimate]   AABB dev%%=%s >=%.1f%%, 更细体素重试" % (np.round(dev, 3), AABB_TOL))
         voxel *= 0.5
-        mq = run(voxel)
+        mq = clamp_to_bbox(run(voxel))
 
     extq = np.asarray(mq.get_axis_aligned_bounding_box().get_extent())
     dev = np.abs(extq - ext0) / np.maximum(ext0, 1e-9) * 100.0
     nf = len(mq.triangles)
     face_ok = 0.5 * target_faces <= nf <= 1.3 * target_faces
-    aabb_ok = bool(np.all(dev < 1.0))
-    print("[decimate] DONE total=%.1fs peak=%.0fMB  faces=%d(ok=%s)  AABB dev%%=%s(ok=%s)"
-          % (time.time() - t0, peak_mb(), nf, face_ok, np.round(dev, 4), aabb_ok))
+    aabb_ok = bool(np.all(dev < AABB_TOL))
+    print("[decimate] DONE total=%.1fs peak=%.0fMB  faces=%d(ok=%s)  AABB dev%%=%s(ok<%.1f%%=%s)"
+          % (time.time() - t0, peak_mb(), nf, face_ok, np.round(dev, 4), AABB_TOL, aabb_ok))
     if not face_ok:
         print("[decimate] WARNING: 面数不在 [0.5,1.3]*target 区间")
     if not aabb_ok:
-        print("[decimate] WARNING: AABB 偏差 >=1%, 请检查(仍可用于视觉参照)")
+        print("[decimate] WARNING: AABB 偏差 >=%.1f%%, 请检查(仍可用于视觉参照)" % AABB_TOL)
 
     verts = np.asarray(mq.vertices, dtype=np.float64)
     tris = np.asarray(mq.triangles, dtype=np.int32)
@@ -377,8 +389,10 @@ lb=makeLabel('y 左','#77ff77'); lb.position.set(0,AX+1.2,0.3); originGrp.add(lb
 lb=makeLabel('z 上','#7799ff'); lb.position.set(0,0,AX+1.2); originGrp.add(lb);
 scene.add(originGrp);
 
-// ---- 路径层 (每层一条 Line, HSV 渐变) ----
+// ---- 路径层 (每层/列一条 Line, HSV 渐变) ----
+const UNIT = D.zigzag ? '列' : '层';   // zigzag 模式下 layer 语义=列
 const layerLines=[];
+const ends=[];  // 每层首末点(zigzag 连接线用)
 const flat=[]; // 动画用: 全路径顺序点
 D.layers.forEach(function(L,i){
   const p=b64f32(L.pos);
@@ -388,9 +402,24 @@ D.layers.forEach(function(L,i){
   const line=new THREE.Line(g,new THREE.LineBasicMaterial({color:col}));
   line.userData={idx:L.idx,z:L.z,n:p.length/3,color:col};
   scene.add(line); layerLines.push(line);
+  if(p.length>=3){ends.push({first:[p[0],p[1],p[2]], last:[p[p.length-3],p[p.length-2],p[p.length-1]]});}
+  else{ends.push(null);}
   for(let k=0;k<p.length;k+=3){flat.push(p[k],p[k+1],p[k+2]);}
 });
 const flatArr=new Float32Array(flat);
+
+// ---- zigzag: 列间横跳连接线(前列末点->后列首点, 细灰色), 使弓字视觉连续 ----
+const connectors=[];
+if(D.zigzag){
+  for(let i=0;i+1<ends.length;i++){
+    if(!ends[i]||!ends[i+1])continue;
+    const A=ends[i].last, B=ends[i+1].first;
+    const g=new THREE.BufferGeometry();
+    g.setAttribute('position',new THREE.BufferAttribute(new Float32Array([A[0],A[1],A[2],B[0],B[1],B[2]]),3));
+    const ln=new THREE.Line(g,new THREE.LineBasicMaterial({color:0x999999,transparent:true,opacity:0.55}));
+    scene.add(ln); connectors.push(ln);
+  }
+}
 
 // ---- 飞手降采样航点 (Points + 悬停拾取) ----
 let pilotPoints=null, pilotLabels=null;
@@ -445,17 +474,21 @@ function updateLayers(){
     ln.visible = showLines && vis;
     ln.material.linewidth=1;
   }
-  // 高亮当前层
+  // 高亮当前层/列
   const cur=layerLines[N];
   if(showLines) cur.visible=true;
+  // zigzag 连接线: 累积模式下随已显示的列显示, 单列模式隐藏
+  for(let i=0;i<connectors.length;i++){
+    connectors[i].visible = showLines && (cumulative ? (i+1<=N) : false);
+  }
   const c=cur.userData;
   document.getElementById('layerlabel').innerHTML=
-    '第 '+(N+1)+'/'+nLayers+' 层 &nbsp; z='+c.z.toFixed(2)+' m &nbsp; 航点 '+c.n;
+    '第 '+(N+1)+'/'+nLayers+' '+UNIT+' &nbsp; z='+c.z.toFixed(2)+' m &nbsp; 航点 '+c.n;
 }
 slider.oninput=updateLayers;
 document.getElementById('b_lmode').onclick=function(){
   cumulative=!cumulative;
-  this.textContent = cumulative ? '层模式: 累积(1~N)' : '层模式: 仅第N层';
+  this.textContent = cumulative ? ('模式: 累积(1~N)'+UNIT) : ('模式: 仅第N'+UNIT);
   updateLayers();
 };
 document.getElementById('b_lines').onclick=function(){
@@ -510,7 +543,7 @@ function tick(now){
     drone.position.set(flatArr[i],flatArr[i+1],flatArr[i+2]);
     const li=layerOfIdx(Math.floor(animIdx));
     document.getElementById('anim').innerHTML=
-      '第'+(li+1)+'层 &nbsp; ('+flatArr[i].toFixed(1)+', '+flatArr[i+1].toFixed(1)+', '+flatArr[i+2].toFixed(1)+')';
+      '第'+(li+1)+UNIT+' &nbsp; ('+flatArr[i].toFixed(1)+', '+flatArr[i+1].toFixed(1)+', '+flatArr[i+2].toFixed(1)+')';
   }
   controls.update();
   renderer.render(scene,camera);
@@ -525,14 +558,19 @@ requestAnimationFrame(tick);
 # ---------------------------------------------------------------------------
 def build_info_html(meta, model_name, n_layers, total_pts, total_dist, height, n_pilot):
     note = meta.get("coordinate_system_note", "")
+    is_zig = meta.get("path_style") == "zigzag"
+    unit = "列" if is_zig else "层"
+    title = "喷涂路径查看器" + ("（单墙竖向 Zigzag）" if is_zig else "")
     return (
-        "<b>喷涂路径查看器</b><br>"
+        "<b>" + title + "</b><br>"
         "模型: " + model_name + "<br>"
-        "层数: <b>" + str(n_layers) + "</b> &nbsp; 全量航点: <b>" + str(total_pts) + "</b><br>"
+        + unit + "数: <b>" + str(n_layers) + "</b> &nbsp; 全量航点: <b>" + str(total_pts) + "</b><br>"
         + ("飞手航点: <b>" + str(n_pilot) + "</b><br>" if n_pilot else "")
         + "总里程: <b>" + ("%.0f" % total_dist) + " m</b> &nbsp; 建筑高: <b>" + ("%.1f" % height) + " m</b><br>"
         "<span class='hint'>坐标系: " + note + "</span><br>"
-        "<span class='hint'>路径应贴在建筑外侧约 spray_distance 米处; 拖动下方滑块逐层查看, ▶ 播放沿路径飞行。</span>"
+        + ("<span class='hint'>单面墙弓字路径, 灰线为列间横跳; 拖动滑块逐列查看, ▶ 播放沿列序飞行。</span>"
+           if is_zig else
+           "<span class='hint'>路径应贴在建筑外侧约 spray_distance 米处; 拖动下方滑块逐层查看, ▶ 播放沿路径飞行。</span>")
     )
 
 
@@ -592,6 +630,7 @@ def main():
             "mesh": {"pos": b64_f32(placed.astype(np.float32).reshape(-1)),
                      "idx": b64_u32(tris.reshape(-1))},
             "layers": layer_data,
+            "zigzag": meta.get("path_style") == "zigzag",  # zigzag: 补画列间连接线 + 文案改"列"
             "pilot": ({"pos": b64_f32(pilot["pos"].reshape(-1)), "labels": pilot["labels"]}
                       if pilot else None),
             "infoHtml": build_info_html(meta, model_name, n_layers, total_pts,

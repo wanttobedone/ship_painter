@@ -95,6 +95,44 @@ python3.8 tools/make_pilot_viewer.py \
 
 ---
 
+## 3.5 单墙竖向 Zigzag 模式（可选变体）
+
+若只想喷"正对无人机那面墙"、走竖向弓字（列式上下扫），用 `make_zigzag_wall.py`
+从**同一份** `waypoints_full.csv` 离线后处理即可，摆机规则与坐标系与环绕版完全相同：
+
+```bash
+# 1) 生成竖向 zigzag 航点(默认 vertical, 列间距=layer_height)
+python3.8 tools/make_zigzag_wall.py \
+    --csv /tmp/ship_painter_export/waypoints_full.csv \
+    --meta /tmp/ship_painter_export/export_meta.json \
+    --out-dir /tmp/ship_painter_export
+#   产出: zigzag_wall_full.csv / zigzag_wall_pilot.csv / zigzag_meta.json
+#   起点=飞手视角左上角, 第一笔向下, 弓字交替; layer_index 语义=列号。
+#   （横排变体加 --pattern horizontal）
+
+# 2) 出 HTML(复用 viewer, 传 zigzag_meta.json 即自动切"列"文案+列间连接线)
+python3.8 tools/make_pilot_viewer.py \
+    --stl models/wall1.stl \
+    --csv /tmp/ship_painter_export/zigzag_wall_full.csv \
+    --pilot-csv /tmp/ship_painter_export/zigzag_wall_pilot.csv \
+    --meta /tmp/ship_painter_export/zigzag_meta.json \
+    --out viewer_zigzag.html
+
+# 3) 出 .plan(waypoints_to_qgc_plan.py 零改动复用)
+python3.8 tools/waypoints_to_qgc_plan.py \
+    --csv /tmp/ship_painter_export/zigzag_wall_pilot.csv \
+    --home-lat <纬度> --home-lon <经度> --heading <方位角> \
+    --out demo_zigzag.plan
+```
+
+要点/可调参数：
+- `--column-spacing`（默认=layer_height=2.0 m）、`--edge-inset`（默认=列距/2）控制列的疏密与边缘内缩。
+- `--normal-dot`（默认 0.7）控制"正对"判定的角度宽窄；调大只保留更正对的中央面（去掉圆角）。
+- `--near-x-tol`（默认 3.0 m）只保留贴近主墙面（x≈forward−spray）的点，**自动剔除建筑顶部退台/凹进**
+  造成的竖列大跳变；若你确实想把退台也喷进去，把它设大（如 100）即可关闭。
+  被跳过/偏离的层会打 WARNING，属正常提示。
+- 列数取决于该墙实际宽度（wall1 前墙约 34 m → 约 17 列）。
+
 ## 4. 发给飞手的东西
 
 - `viewer.html`（离线查看器）
